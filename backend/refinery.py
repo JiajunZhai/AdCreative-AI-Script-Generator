@@ -5,30 +5,86 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Attempt to load ChromaDB, fallback to Mock DB if build tools missing
+import json
+import uuid
+import os
+import numpy as np
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# We have sunset ChromaDB due to Python 3.14+ Pydantic compatibility failure
+# Upgrading to a zero-dependency (native numpy+scikit) persistent Vector Matrix
 try:
-    import chromadb
-    CHROMA_AVAILABLE = True
-    client = chromadb.PersistentClient(path="./chroma_db")
-    collection = client.get_or_create_collection(name="creative_genes")
-except Exception as e:
-    print(f"⚠️ ChromaDB initialization failed: {e}. Falling back to In-Memory DB.")
-    CHROMA_AVAILABLE = False
-    class MockChromaCollection:
-        def __init__(self):
-            self.docs = []
-            self.metas = []
-        def add(self, documents, metadatas, ids):
-            self.docs.extend(documents)
-            self.metas.extend(metadatas)
-            print(f"MockDB Added {len(documents)} records.")
-        def query(self, query_texts, n_results):
-            if not self.docs:
-                return {"documents": [[]]}
-            # Dummy return the last N inserted docs
-            return {"documents": [self.docs[-n_results:]]}
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+except ImportError:
+    print("[WARN] Scikit-Learn not found. Run pip install scikit-learn. Falling back to memory-only.")
+    TfidfVectorizer = None
+
+class ScikitLearnLocalDB:
+    def __init__(self, db_path="./chroma_db/local_storage.json"):
+        self.db_path = db_path
+        self.docs = []
+        self.metas = []
+        self.vectorizer = TfidfVectorizer() if TfidfVectorizer else None
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self.load()
+
+    def save(self):
+        with open(self.db_path, "w", encoding="utf-8") as f:
+            json.dump({"docs": self.docs, "metas": self.metas}, f, ensure_ascii=False)
+
+    def load(self):
+        if os.path.exists(self.db_path):
+            try:
+                with open(self.db_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.docs = data.get("docs", [])
+                    self.metas = data.get("metas", [])
+            except Exception:
+                pass
+
+    def add(self, documents, metadatas, ids):
+        self.docs.extend(documents)
+        self.metas.extend(metadatas)
+        self.save()
+        print(f"[RAG] Local matrix DB added {len(documents)} records (total: {len(self.docs)}).")
+
+    def query(self, query_texts, n_results=3):
+        if not self.docs or not self.vectorizer:
+            return {"documents": [[]]}
             
-    collection = MockChromaCollection()
+        # 1. Fit TF-IDF on our complete knowledge base
+        tfidf_matrix = self.vectorizer.fit_transform(self.docs)
+        
+        # 2. Transform the incoming search queries (handles batch)
+        query_vecs = self.vectorizer.transform(query_texts)
+        
+        # 3. Calculate cosine similarity
+        similarities = cosine_similarity(query_vecs, tfidf_matrix)
+        
+        batch_results = []
+        batch_metas = []
+        for sim_scores in similarities:
+            top_indices = np.argsort(sim_scores)[::-1][:n_results]
+            
+            results = [self.docs[i] for i in top_indices if sim_scores[i] > 0] 
+            metas = [self.metas[i] for i in top_indices if sim_scores[i] > 0] 
+            
+            if not results and self.docs:
+                results = self.docs[-n_results:] 
+                metas = self.metas[-n_results:] 
+                
+            batch_results.append(results)
+            batch_metas.append(metas)
+            
+        return {"documents": batch_results, "metadatas": batch_metas}
+
+collection = ScikitLearnLocalDB()
+CHROMA_AVAILABLE = True # DB operates fully natively
 
 def distill_and_store(raw_text: str, source_url: str, year_quarter: str = "Unknown Date"):
     """
@@ -65,14 +121,19 @@ def distill_and_store(raw_text: str, source_url: str, year_quarter: str = "Unkno
     if not raw_text.strip() and source_url.strip():
         try:
             import urllib.request
+            from bs4 import BeautifulSoup
             req = urllib.request.Request(source_url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req) as response:
                 html = response.read().decode('utf-8')
-                # A very rough text extraction (strip tags)
-                import re
-                raw_text = re.sub(r'<[^>]+>', ' ', html)
+                
+                soup = BeautifulSoup(html, 'html.parser')
+                # Remove non-content tags
+                for tag in soup(["script", "style", "nav", "footer", "meta", "noscript", "header"]):
+                    tag.decompose()
+                
+                raw_text = soup.get_text(separator=' ', strip=True)
         except Exception as e:
-            raise Exception(f"Failed to scrape URL: {e}")
+            raise Exception(f"Failed to scrape URL with BeautifulSoup: {e}")
 
     try:
         response = cloud_client.chat.completions.create(
@@ -157,3 +218,45 @@ def retrieve_context(query_string: str, top_k: int = 3) -> tuple[str, list[str]]
     except Exception as e:
         print(f"RAG Retrieval failed: {e}")
         return "", []
+
+def get_collection_stats() -> dict:
+    """Returns total rule count and the last 10 inserted intel items."""
+    total = len(collection.docs)
+    recent = []
+    
+    last_n = min(10, total)
+    if last_n > 0:
+        docs = collection.docs[-last_n:]
+        metas = collection.metas[-last_n:]
+        
+        for i in range(last_n):
+            idx = last_n - 1 - i # reverse order
+            meta = metas[idx] or {}
+            doc = docs[idx] or ""
+            
+            cat = meta.get("category", "")
+            if cat.startswith("region_"):
+                region = meta.get("element", "Region")
+                tag = "Cultural"
+            elif cat.startswith("style_"):
+                region = "Global"
+                tag = "Style"
+            elif cat.startswith("logic_"):
+                region = "Global"
+                tag = "Mechanics"
+            else:
+                region = "Global"
+                tag = cat or "General"
+                
+            recent.append({
+                "id": str(i),
+                "region": region,
+                "tag": tag,
+                "title": doc[:60] + "..." if len(doc) > 60 else doc,
+                "time": meta.get("year_quarter", "N/A"),
+                "link": meta.get("source", "#"),
+                "source": "Oracle Vault",
+                "stat": f"Rank {meta.get('score', 85)}"
+            })
+            
+    return {"total_rules": total, "recent_intel": recent}

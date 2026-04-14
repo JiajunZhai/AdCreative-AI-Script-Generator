@@ -2,9 +2,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import os
+import sys
 import json
+from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
+import uuid
+from datetime import datetime
 
 load_dotenv()
 cloud_client = OpenAI(
@@ -27,15 +31,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from projects_api import router as projects_router
+app.include_router(projects_router)
+
 class GenerateScriptRequest(BaseModel):
-    title: str
-    usp: str
-    platform: str
-    angle: str
-    region: str = Field(default="NA/EU", description="Target region for culture intelligence")
+    project_id: str
+    region_id: str
+    platform_id: str
+    angle_id: str
     engine: str = Field(default="cloud", description="The LLM source engine (cloud or local)")
 
 class GenerateScriptResponse(BaseModel):
+    script_id: str
     hook_score: int
     hook_reasoning: str
     clarity_score: int
@@ -54,17 +61,96 @@ class GenerateScriptResponse(BaseModel):
 def read_root():
     return {"status": "ok", "message": "AdCreative AI Engine Sandbox is running"}
 
-from prompts import get_system_prompt_template
 
-from scraper import fetch_playstore_data, extract_usp_via_llm_mock
+from scraper import fetch_playstore_data, extract_usp_via_llm_with_usage
 from exporter import generate_pdf_report
 from refinery import retrieve_context, distill_and_store
+from usage_tokens import total_tokens_from_completion
+from usage_tracker import (
+    get_summary as usage_get_summary,
+    record_extract_url_success,
+    record_generate_success,
+    record_oracle_ingest_success,
+)
 
 class GeneratePdfRequest(BaseModel):
     data: dict
 
+REQUIRED_SCRIPT_FIELDS = {
+    "hook_score",
+    "hook_reasoning",
+    "clarity_score",
+    "clarity_reasoning",
+    "conversion_score",
+    "conversion_reasoning",
+    "bgm_direction",
+    "editing_rhythm",
+    "script",
+    "psychology_insight",
+    "cultural_notes",
+    "competitor_trend"
+}
+
+REQUIRED_SCRIPT_LINE_FIELDS = {
+    "time",
+    "visual",
+    "audio_content",
+    "audio_meaning",
+    "text_content",
+    "text_meaning"
+}
+
+def _print_console_safe(text: str) -> None:
+    """Avoid UnicodeEncodeError on Windows consoles (e.g. cp936) when prompt/context has rare symbols."""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write(text.encode("utf-8", errors="replace"))
+        sys.stdout.buffer.write(b"\n")
+
+
+def _is_valid_script_payload(payload: dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if not REQUIRED_SCRIPT_FIELDS.issubset(payload.keys()):
+        return False
+    if not isinstance(payload.get("script"), list) or not payload["script"]:
+        return False
+    if not isinstance(payload.get("cultural_notes"), list):
+        return False
+    for line in payload["script"]:
+        if not isinstance(line, dict):
+            return False
+        if not REQUIRED_SCRIPT_LINE_FIELDS.issubset(line.keys()):
+            return False
+    return True
+
+def _looks_like_error_placeholder(data: dict[str, Any]) -> bool:
+    haystacks = [
+        str(data.get("hook_reasoning", "")),
+        str(data.get("clarity_reasoning", "")),
+        str(data.get("conversion_reasoning", "")),
+        str(data.get("bgm_direction", "")),
+        str(data.get("editing_rhythm", ""))
+    ]
+    for line in data.get("script", []):
+        if isinstance(line, dict):
+            haystacks.append(str(line.get("visual", "")))
+
+    flags = (
+        "Ollama parsing failure",
+        "Error Local LLM Output",
+        "LOCAL_JSON_PARSE_FAILED",
+        "LOCAL_REQUEST_FAILED"
+    )
+    return any(flag in text for text in haystacks for flag in flags)
+
 @app.post("/api/export/pdf")
 def export_pdf(request: GeneratePdfRequest):
+    if not _is_valid_script_payload(request.data):
+        raise HTTPException(status_code=400, detail="Invalid script payload for PDF export.")
+    if _looks_like_error_placeholder(request.data):
+        raise HTTPException(status_code=400, detail="Refusing to export error placeholder content.")
     try:
         pdf_b64 = generate_pdf_report(request.data)
         return {"success": True, "pdf_base64": pdf_b64}
@@ -81,6 +167,12 @@ class ExtractUrlResponse(BaseModel):
     extracted_usp: str = ""
     error: str = ""
 
+@app.get("/api/usage/summary")
+def usage_summary():
+    """Daily usage snapshot: Oracle ops + LLM tokens (provider usage when available)."""
+    return usage_get_summary()
+
+
 @app.post("/api/extract-url", response_model=ExtractUrlResponse)
 def extract_url(request: ExtractUrlRequest):
     data = fetch_playstore_data(request.url)
@@ -88,8 +180,51 @@ def extract_url(request: ExtractUrlRequest):
     if not data["success"]:
         return {"success": False, "error": data.get("error", "Failed to parse.")}
         
-    extracted_usp = extract_usp_via_llm_mock(data["title"], data, request.engine)
-    
+    if request.engine == 'cloud' and cloud_client:
+        from scraper import EXTRACT_USP_VIA_LLM_SYSTEM_PROMPT, _serialize_director_archive, _validate_director_archive
+        import json
+        desc = data.get("description", "")[:1500]
+        genre = data.get("genre", "Game")
+        installs = data.get("installs", "Unknown")
+        recent_changes = data.get("recentChanges", "")[:300]
+        
+        user_prompt = (
+            f"Game title: {data.get('title')}\n"
+            f"Genre (store): {genre}\n"
+            f"Installs (store label): {installs}\n"
+            f"Recent changes / What's new:\n{recent_changes}\n\n"
+            f"--- Raw store description (may truncate) ---\n{desc}\n"
+        )
+        try:
+            response = cloud_client.chat.completions.create(
+                model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+                response_format={ "type": "json_object" },
+                messages=[
+                    {"role": "system", "content": EXTRACT_USP_VIA_LLM_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ]
+            )
+            raw_content = response.choices[0].message.content
+            parsed = json.loads(raw_content)
+            
+            if _validate_director_archive(parsed):
+                extracted_usp = _serialize_director_archive(parsed, installs, recent_changes)
+                extract_tokens = response.usage.total_tokens if hasattr(response, 'usage') and response.usage else 0
+                extract_used_llm = True
+            else:
+                raise ValueError("JSON validation failed")
+        except Exception as e:
+            print(f"Cloud extract failed, fallback: {e}")
+            from scraper import extract_usp_via_llm_with_usage as ext_fallback
+            extracted_usp, extract_tokens, extract_used_llm = ext_fallback(data["title"], data, "mock")
+    else:
+        from scraper import extract_usp_via_llm_with_usage as ext_fallback
+        extracted_usp, extract_tokens, extract_used_llm = ext_fallback(data["title"], data, request.engine)
+    record_extract_url_success(
+        request.engine,
+        measured_tokens=extract_tokens,
+        used_llm=extract_used_llm,
+    )
     return {
         "success": True,
         "title": data["title"],
@@ -109,134 +244,244 @@ class IngestResponse(BaseModel):
 @app.post("/api/refinery/ingest", response_model=IngestResponse)
 def ingest_report(request: IngestRequest):
     result = distill_and_store(request.raw_text, request.source_url, request.year_quarter)
+    success = result.get("success", False)
+    if success:
+        record_oracle_ingest_success()
     return {
-        "success": result.get("success", False),
+        "success": success,
         "extracted_count": result.get("extracted_count", 0),
         "error": result.get("error", "")
     }
 
-@app.post("/api/generate", response_model=GenerateScriptResponse)
-def generate_script(request: GenerateScriptRequest):
-    # 0. Query Oracle (RAG Retrieval)
-    oracle_context, citations = retrieve_context(f"{request.region} {request.angle} {request.usp}", top_k=3)
+@app.get("/api/refinery/stats")
+def get_refinery_stats():
+    from refinery import get_collection_stats
+    return get_collection_stats()
 
-    # 1. 模拟组装 Prompt 引擎
-    generated_system_prompt = get_system_prompt_template(
-        title=request.title,
-        usp=request.usp,
-        platform=request.platform,
-        angle=request.angle,
-        region=request.region,
-        oracle_context=oracle_context
-    )
-    # 控制台打印生成的超级 Prompt
-    print("\n" + "="*50)
-    print("🔥 [SYSTEM PROMPT GENERATED] 🔥")
-    print("="*50)
-    print(generated_system_prompt)
-    print("="*50 + "\n")
+class RecommendStrategyRequest(BaseModel):
+    title: str
+    core_gameplay: str
+    core_usp: str
+    region: str
+    platform: str
 
-    # Mock Localization & Culture Intelligence Logic
-    cultural_notes = []
-    competitor_trend = ""
-    is_rtl = False
-    
-    if request.region == "Japan":
-        cultural_notes = [
-            "Requirement: Highlight Voice Actor (CV) names prominently.",
-            "Visual: Vertical UI composition with heavy emphasis on character gacha/art.",
-            "Caution: Avoid abrupt/rough transitions, ensure grammatically perfect native translation."
-        ]
-        competitor_trend = f"75% of top ads in Japan for '{request.angle}' style use top-tier CV voiceovers. Try to incorporate character name-drops."
-    elif request.region == "Southeast Asia":
-        cultural_notes = [
-            "Visual: High contrast, gold/red color schemes.",
-            "Offer: Emphasize 'Free Draws' or 'Gift Codes' in the first 3 seconds.",
-            "Style: Exaggerated KOL reactions perform best."
-        ]
-        competitor_trend = f"Current SEA trend highly favors numeric inflation and extreme visual rewards. 'Free 1000 Draws' CTA is highly recommended."
-    elif request.region == "Middle East":
-        cultural_notes = [
-            "Compliance Rule: No references to alcohol, pigs, or religiously sensitive attire.",
-            "Formatting Rule: RTL (Right-to-Left) typography required for Arabic.",
-            "Visual: Desert/Gold palettes with emphasis on tribal/clan honor perform 30% better."
-        ]
-        competitor_trend = f"'Clan vs Clan' massive battle setups are driving the lowest CPIs in Middle East SLG ads."
-        is_rtl = True
-    else: # NA / EU
-        cultural_notes = [
-            "Style: UGC (User Generated Content) raw/home-style reviews convert best.",
-            "Direction: Personal heroism and fail-bait logic.",
-            "Caution: Avoid overly polished 'fake' cinematic trailers."
-        ]
-        competitor_trend = f"Fail-bait puzzles are currently dominating NA/EU charts with a 4% average CTR."
+class RecommendStrategyResponse(BaseModel):
+    region_analysis: str
+    platform_analysis: str
 
-    # Local Engine Routing
-    if request.engine == "local":
-        from ollama_client import generate_with_local_llm
-        local_result = generate_with_local_llm(
-            system_prompt=generated_system_prompt,
-            user_input="Generate the localized script according to the constraints.",
-            model="qwen3.5:9b", # Using Qwen3.5:9b as directed for Director Script execution
-            expected_json=True
-        )
-        if isinstance(local_result, dict):
-            local_result["citations"] = citations
-        return local_result
-
+@app.post("/api/refinery/recommend-strategy", response_model=RecommendStrategyResponse)
+def recommend_strategy(request: RecommendStrategyRequest):
     if cloud_client:
-        try:
-            print("🧠 DeepSeek Cloud Engine detected. Igniting AI reasoning capabilities...")
-            # We explicitly add raw json instruction to prevent truncation or markdown wrapper blocks
-            generated_system_prompt += "\n\nCRITICAL: Return only the raw JSON. Ensure the JSON object is complete and valid with no markdown wrappers."
+        prompt = f"""You are an elite UA strategy manager.
+Given Game: {request.title}
+Gameplay: {request.core_gameplay}
+USP: {request.core_usp}
+Target Region: {request.region}
+Target Platform: {request.platform}
 
-            # Note: DeepSeek response_format behavior is supported
+Output a JSON with two keys:
+1. "region_analysis": A 1-2 sentence tactical insight on what this culture/region wants.
+2. "platform_analysis": A 1-2 sentence tactical insight for this platform.
+Keep it strictly technical and UA focused."""
+        try:
             response = cloud_client.chat.completions.create(
                 model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
                 response_format={ "type": "json_object" },
-                messages=[
-                    {"role": "system", "content": generated_system_prompt},
-                    {"role": "user", "content": "Generate the localized script according to the constraints."}
-                ]
+                messages=[{"role": "user", "content": prompt}]
             )
-            raw_json = response.choices[0].message.content
-            parsed = json.loads(raw_json)
-            parsed["citations"] = citations
-            # Ensure the output maps to the model
-            return parsed
+            raw = response.choices[0].message.content
+            import json
+            parsed = json.loads(raw)
+            return RecommendStrategyResponse(
+                region_analysis=parsed.get("region_analysis", f"Emphasis on {request.region} localized visuals."),
+                platform_analysis=parsed.get("platform_analysis", f"First 3 seconds hook for {request.platform}.")
+            )
         except Exception as e:
-            print(f"❌ DeepSeek API Failed: {e}. Falling back to intelligence mock.")
+            print(f"Recommend error: {e}")
+            pass
+            
+    # Mock fallback
+    return RecommendStrategyResponse(
+        region_analysis=f"Recommended for {request.region}: Culturally resonant voiceovers and targeted localization.",
+        platform_analysis=f"Recommended for {request.platform}: Format matching with fast jump cuts targeting user behavior."
+    )
 
-    print("⚠️  No Cloud API Key or Request Errored. Falling back to Mock Data Model.")
-    return {
-        "hook_score": 92,
-        "hook_reasoning": f"High saturation visual conflict. Opening with a dramatic {request.title} failure triggers immediate pattern interruption.",
-        "clarity_score": 85,
-        "clarity_reasoning": f"UI symbolic clarity. The '{request.usp}' mechanic is instantly understandable without any voiceover narrative.",
-        "conversion_score": 78,
-        "conversion_reasoning": "Clear emotional reward. The viewer feels a strong urge to correct the mistake and download the game to fix it.",
-        "psychology_insight": "FOMO & Cognitive Dissonance (The viewer's brain rejects the stupidity of the ad and wants to resolve the puzzle).",
-        "bgm_direction": "High energy phonk / rhythmic beats matching the fail state.",
-        "editing_rhythm": "Fast jump cuts every 0.5s for the first 3 seconds, then a long agonizing pause on the fail screen.",
+
+@app.get("/api/insights/metadata")
+def get_insights_metadata():
+    """Reads the JSON DB and returns available config options for frontend."""
+    import os, json
+    base_dir = os.path.join(os.path.dirname(__file__), 'data', 'insights')
+    if not os.path.exists(base_dir):
+        return {"regions": [], "platforms": [], "angles": []}
+    
+    regions, platforms, angles = [], [], []
+    for category_dir, target_list in [('regions', regions), ('platforms', platforms), ('angles', angles)]:
+        dir_path = os.path.join(base_dir, category_dir)
+        if not os.path.exists(dir_path): continue
+        for f in os.listdir(dir_path):
+            if not f.endswith('.json'): continue
+            with open(os.path.join(dir_path, f), 'r', encoding='utf-8') as file:
+                data = json.load(file)
+                target_list.append(data)
+                
+    return {"regions": regions, "platforms": platforms, "angles": angles}
+
+class InsightManageRequest(BaseModel):
+    category: str
+    insight_id: str
+    content: dict
+
+@app.post("/api/insights/manage/update")
+def update_insight(req: InsightManageRequest):
+    import os, json
+    base_dir = os.path.join(os.path.dirname(__file__), 'data', 'insights')
+    target_dir = os.path.join(base_dir, req.category)
+    os.makedirs(target_dir, exist_ok=True)
+    file_path = os.path.join(target_dir, f"{req.insight_id}.json")
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(req.content, f, ensure_ascii=False, indent=4)
+    return {"success": True}
+
+class InsightDeleteRequest(BaseModel):
+    category: str
+    insight_id: str
+
+@app.post("/api/insights/manage/delete")
+def delete_insight(req: InsightDeleteRequest):
+    import os
+    base_dir = os.path.join(os.path.dirname(__file__), 'data', 'insights')
+    file_path = os.path.join(base_dir, req.category, f"{req.insight_id}.json")
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        return {"success": True}
+    return {"success": False, "error": "Not found"}
+
+@app.post("/api/generate", response_model=GenerateScriptResponse)
+def generate_script(request: GenerateScriptRequest):
+    import os, json
+    from prompts import render_system_prompt
+
+    # 1. READ DATABASES (MOCK DB FETCH)
+    # Get Workspace / Project DNA
+    project_json = {"name": "Unknown", "game_info": {"core_usp": "Generic Game"}}
+    workspace_file = os.path.join(os.path.dirname(__file__), 'data', 'workspaces', f"{request.project_id}.json")
+    if os.path.exists(workspace_file):
+        with open(workspace_file, 'r', encoding='utf-8') as f:
+            project_json = json.load(f)
+    
+    # Get Atomic Insights
+    base_dir = os.path.join(os.path.dirname(__file__), 'data', 'insights')
+    def read_insight(insight_id: str):
+        if not insight_id: return {"error": "not provided"}
+        category = insight_id.split('_')[0] + 's' # 'region' -> 'regions'
+        path = os.path.join(base_dir, category, f"{insight_id}.json")
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {"error": "not found"}
+
+    region_json = read_insight(request.region_id)
+    platform_json = read_insight(request.platform_id)
+    angle_json = read_insight(request.angle_id)
+
+    gi = project_json.get('game_info', {})
+    game_context = (
+        f"Title: {project_json.get('name')}\n"
+        f"Core Gameplay: {gi.get('core_gameplay', '')}\n"
+        f"USP: {gi.get('core_usp', '')}\n"
+        f"Target Persona: {gi.get('target_persona', '')}\n"
+        f"Extended Hooks: {gi.get('value_hooks', '')}"
+    )
+
+    # 2. RUN RECIPE SYNTHESIS
+    final_prompt = render_system_prompt(
+        game_context=game_context,
+        culture_context=region_json,
+        platform_rules=platform_json,
+        creative_logic=angle_json
+    )
+
+    print("\n[ATOMIC DB SYNTHESIS SUCCESS - SUPER CONTEXT GENERATED]")
+    _print_console_safe(final_prompt)
+    
+    from usage_tracker import record_generate_success
+
+    def record_history(project_data, req, resp_dict, engine):
+        try:
+            if not project_data.get('id') or project_data.get('id') == "Unknown": return
+            from projects_api import save_project
+            if 'history_log' not in project_data:
+                project_data['history_log'] = []
+            
+            import uuid
+            project_data['history_log'].append({
+                "id": resp_dict.get('script_id') or str(uuid.uuid4()),
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "engine": engine,
+                "recipe": {"region": req.region_id, "platform": req.platform_id, "angle": req.angle_id},
+                "script": resp_dict.get('script', [])
+            })
+            save_project(project_data)
+        except Exception as e:
+            print(f"Failed to record history: {e}")
+
+    # 3. IF LOCAL ENGINE PREFERRED
+    script_id = "SOP-" + uuid.uuid4().hex[:6].upper()
+    if request.engine == 'local':
+        resp = generate_script_local(request, final_prompt)
+        if "error" not in resp:
+            resp['script_id'] = script_id
+            record_history(project_json, request, resp, 'local')
+            return GenerateScriptResponse(**resp)
+
+    # 4. DEFAULT CLOUD CLUSTER
+    if cloud_client:
+        try:
+            response = cloud_client.chat.completions.create(
+                model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+                messages=[ 
+                    {"role": "system", "content": final_prompt},
+                    {"role": "user", "content": "Please generate the script JSON based on this context."}
+                ],
+                response_format={ "type": "json_object" }
+            )
+            raw = response.choices[0].message.content
+            parsed = json.loads(raw)
+            parsed['script_id'] = script_id
+            record_generate_success(engine='cloud', measured_tokens=0)
+            record_history(project_json, request, parsed, 'cloud')
+            return GenerateScriptResponse(**parsed)
+        except Exception as e:
+            print(f"Synthesis Engine failed: {e}")
+            pass
+
+    record_generate_success(engine='mock', measured_tokens=0)
+    # Mock fallback
+    mock_resp = {
+        "script_id": script_id,
+        "hook_score": 95,
+        "hook_reasoning": "Synthesized context match guaranteed.",
+        "clarity_score": 90,
+        "clarity_reasoning": "Direct mapping from atomic DB rules.",
+        "conversion_score": 95,
+        "conversion_reasoning": "High emotional resonance based on Angle isolation.",
+        "bgm_direction": region_json.get('preferred_bgm', 'Epic Score'),
+        "editing_rhythm": platform_json.get('specs', ['Standard cuts'])[0],
         "script": [
             {
                 "time": "0s",
-                "visual": f"(中文指令) 玩家队伍卡在 {request.title} 的第一关。呈现极度夸张的失败动画效果，屏幕震动。",
-                "audio_content": "هل أنت أذكى من هذا؟" if is_rtl else "99% の人はこれをクリアできません！" if request.region == "Japan" else "99% of people can't pass this!",
-                "audio_meaning": "99%的人无法通关！",
-                "text_content": "🧠IQ TEST🧠" if not is_rtl else "🧠 اختبار الذكاء 🧠",
-                "text_meaning": "智商测试"
-            },
-            {
-                "time": "3s",
-                "visual": f"(中文指令) 玩家盲目使用了 {request.usp} 道具，但属性完全不对，导致全军覆没。跳出巨大红叉。",
-                "audio_content": "حاول مرة أخرى!" if is_rtl else "もう一度やってみろ！" if request.region == "Japan" else "Loud buzzer sound. Try again!",
-                "audio_meaning": "发出巨大错误提示音，再试一次！",
-                "text_content": "FAIL" if not is_rtl else "فشل",
-                "text_meaning": "失败"
+                "visual": angle_json.get('logic_steps', ['Action'])[0] if isinstance(angle_json.get('logic_steps'), list) else 'Action',
+                "audio_content": "Native Voiceover (Simulated)",
+                "audio_meaning": "Oh no!",
+                "text_content": "Local text",
+                "text_meaning": "Alert"
             }
         ],
-        "cultural_notes": cultural_notes,
-        "competitor_trend": competitor_trend,
-        "citations": citations
+        "psychology_insight": angle_json.get('core_emotion', 'None'),
+        "cultural_notes": region_json.get('culture_notes', []),
+        "competitor_trend": "Mock trend based on resonance",
+        "citations": [f"JSON: {request.region_id}", f"JSON: {request.platform_id}", f"JSON: {request.angle_id}"]
     }
+    record_history(project_json, request, mock_resp, 'mock')
+    return GenerateScriptResponse(**mock_resp)

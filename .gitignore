@@ -3,6 +3,7 @@ backend/chroma_db/
 backend/__pycache__/
 backend/.env
 backend/.pytest_cache/
+backend/usage_counters.json
 backend/venv/
 backend/test_*.py
 

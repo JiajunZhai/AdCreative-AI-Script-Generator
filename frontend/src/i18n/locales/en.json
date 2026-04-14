@@ -1,0 +1,182 @@
+{
+  "translation": {
+    "nav": {
+      "quota": "Quota",
+      "create_workspace": "Create Workspace",
+      "loading": "Loading...",
+      "dashboard": "Dashboard",
+      "lab": "Lab",
+      "oracle": "Oracle",
+      "settings": "Settings",
+      "support": "Support",
+      "intel": "Intel",
+      "my_projects": "My Projects",
+      "launch_lab": "LAUNCH LAB",
+      "workspace_label": "WORKSPACE",
+      "create_profile": "+ Create Workspace Profile",
+      "overview": "Overview",
+      "db_context": "DB Context",
+      "slot_d": "Slot D",
+      "initiate": "INITIATE SYNTHESIS",
+      "fusing": "Fusing DB Context Hash",
+      "requesting": "Requesting /api/generate via Cloud..."
+    },
+    "quota": {
+      "title": "DAILY ALLOWANCE",
+      "syncing": "Syncing usage...",
+      "error": "Cannot connect to usage API.",
+      "tokens_remaining": "Tokens Remaining",
+      "provider_billed": "Provider Billed",
+      "estimate_padding": "Estimate Padding",
+      "oracle_searches": "Oracle Retrieves",
+      "oracle_ingests": "Oracle Archives",
+      "hover_hint": "Hover or focus to load usage."
+    },
+    "dashboard": {
+      "title": "SOP Matrix Control",
+      "subtitle": "All generated logic will be strictly anchored to the selected configuration below.",
+      "pipelines": "PIPELINES",
+      "empty": {
+        "title": "Initialize Pipeline",
+        "description": "SOP Factory is empty. Click to spawn a new workspace unit."
+      },
+      "stats": {
+        "scripts": "Scripts",
+        "er": "EST ER%"
+      },
+      "queue": {
+        "title": "Pending SOP Queue",
+        "mock1": "Missing JP layer effects",
+        "mock2": "TikTok UGC variant spilt",
+        "mock3": "RTL Heavy Localization Review"
+      },
+      "history": {
+        "title": "Recent Event Log",
+        "empty": "No events found",
+        "action_issue": "Issued",
+        "action_script": "script"
+      },
+      "card_missing_base": "Base Missing",
+      "btn_launch_lab": "Launch Lab",
+      "btn_edit": "Deep Edit / Analyze",
+      "btn_delete": "Purge Data"
+    },
+    "lab": {
+      "title": "The Lab",
+      "subtitle": "Non-linear Atomic Assembler. Retrieve real DB Insight atomic parameters to build highly scalable strategy slots.",
+      "slot_a": {
+        "header": "ENTITY SOURCE",
+        "title": "Project Entity Lock",
+        "base_params": "USP Matrix",
+        "missing": "No bound asset...",
+        "view_details": "Open Matrix",
+        "scripts": "Scripts"
+      },
+      "slot_b": {
+        "label": "REGION SLOT",
+        "title": "Region Factor (db.regions)"
+      },
+      "slot_c": {
+        "label": "PLATFORM SLOT",
+        "title": "Distribution Genre (db.platforms)"
+      },
+      "slot_d": {
+        "label": "ANGLE SLOT",
+        "title": "Psychological Induction (db.angles)"
+      },
+      "pipeline_title": "SOP PIPELINE",
+      "mixing_console": "MIXING CONSOLE",
+      "db_synced": "LIVE SYNC",
+      "synthesis_status": "Recompiling atomic slots...",
+      "alert_no_project": "Please select a Project Workspace first."
+    },
+    "market": {
+      "saturation": "Saturation Level",
+      "high_risk": "High Risk",
+      "apply_intel": "Apply Target Intelligence",
+      "title": "Live Market Intel",
+      "subtitle": "REAL-TIME DATA STREAM",
+      "hook_genome": "HOOK GENOME",
+      "creative_fatigue": "CREATIVE FATIGUE",
+      "est_lifecycle": "EST. LIFE-CYCLE",
+      "component_feed": "COMPONENT FEED",
+      "sentiment_sniffer": "SENTIMENT SNIFFER",
+      "days": "Days",
+      "vibe": "VIBE",
+      "gain": "Gain",
+      "risk": "Risk"
+    },
+    "oracle": {
+      "title": "Oracle Engine",
+      "siphoning": "Siphoning Oracle RAG Vectors...",
+      "intel_feed": "Intelligence Feed",
+      "alchemy_complete": "Alchemy Complete",
+      "pipeline_fault": "Pipeline Fault",
+      "global_db": "Global DB",
+      "ready": "READY",
+      "utc": "UTC",
+      "refinery": "Intelligence Refinery",
+      "end_updates": "End of recent updates",
+      "desc_1": "Feed long research reports or competitor retrospectives, and let the ",
+      "desc_2": "RAG Vector Engine",
+      "desc_3": " distill ultra-fine-grained strategy factors for direct use in the Generator.",
+      "ingestion": "INGESTION",
+      "source_url": "Source URL",
+      "time_horizon": "Time Horizon",
+      "raw_override": "Raw Override",
+      "empty_hint": "Leave empty for smart crawl",
+      "raw_override_ph": "Drop multi-page internal retrospectives or core findings PDFs directly here...",
+      "matrix": "STRATEGY MATRIX · ORACLE",
+      "rag_rules": "Indexed {{count}} Media Buying Rules"
+    },
+    "theme": {
+      "light": "Light",
+      "dark": "Dark",
+      "system": "Auto",
+      "title": "Appearance Theme (Click to switch)"
+    },
+    "components": {
+      "pro_select_search": "Search DB...",
+      "pro_select_empty": "[No matching DB atom]"
+    },
+    "setup": {
+      "title": "Create Project Archive",
+      "title_edit": "Manage Project DNA (Deep Analysis)",
+      "mode_url": "Smart URL Siphon",
+      "mode_manual": "Manual Identity",
+      "url_ph": "Paste Google Play URL here...",
+      "btn_analyze": "Siphon Data",
+      "analyzing": "LLM Siphoning...",
+      "name_label": "Workspace / Game Name",
+      "name_ph": "e.g. Capybara Defense",
+      "core_gameplay": "Core Gameplay",
+      "core_gameplay_ph": "e.g. Merge & Tower Defense",
+      "core_usp": "Core USP",
+      "core_usp_ph": "e.g. Synthesize capybaras",
+      "target_persona": "Target Persona",
+      "target_persona_ph": "e.g. Casual audience seeking stress relief...",
+      "value_hooks": "Extended Value Hooks",
+      "value_hooks_ph": "Additional pain points, satisfying loops, or hooks...",
+      "cancel": "Cancel",
+      "submit": "Initialize Workspace",
+      "submit_edit": "Apply Overrides"
+    },
+    "param_manager": {
+      "hub_title": "Matrix Parameter Hub",
+      "hub_subtitle": "Engine Atomic Strategy Configurations",
+      "tab_regions": "Regions",
+      "tab_platforms": "Platforms",
+      "tab_angles": "Psych. Angles",
+      "active_atoms": "Active Atoms",
+      "document_suffix": "Document",
+      "saved_success": "Saved successfully",
+      "commit_btn": "Commit Atom",
+      "json_placeholder": "Paste your JSON configuration here...",
+      "select_placeholder": "Select an atom to inspect or modify",
+      "err_json": "Invalid JSON format",
+      "err_missing": "Missing 'id' or 'category' in JSON payload.",
+      "new_entry": "New Entry",
+      "confirm_delete": "Are you sure you want to delete this atom?"
+    }
+  }
+}

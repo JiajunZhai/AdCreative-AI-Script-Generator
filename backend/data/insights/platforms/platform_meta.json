@@ -1,0 +1,11 @@
+{
+    "id": "platform_meta",
+    "category": "platform",
+    "name": "Meta (FB/IG)",
+    "specs": [
+        "Square 1:1 or 4:5 format.",
+        "Smooth transitions with high fidelity gameplay capture.",
+        "Visual oddity hook (Satisfying visual puzzle or fail).",
+        "Keep core text within center square safe zone."
+    ]
+}

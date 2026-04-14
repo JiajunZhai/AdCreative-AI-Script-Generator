@@ -1,8 +1,14 @@
 import json
+import os
 import re
+from typing import Any, NamedTuple
+from dotenv import load_dotenv
 from openai import OpenAI
 
-OLLAMA_BASE_URL = "http://192.168.0.48:11434/v1"
+from usage_tokens import total_tokens_from_completion
+
+load_dotenv()
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://192.168.0.48:11434/v1")
 
 # Synchronous client for easier integration with FastAPI sync endpoints
 local_client = OpenAI(
@@ -10,50 +16,59 @@ local_client = OpenAI(
     api_key="ollama", # Required by the library but ignored by ollama
 )
 
-def repair_json(raw_text: str) -> dict:
-    """
-    Scans the raw string output from the LLM, attempts to extract everything
-    between the first { and the last }, and decodes it as JSON.
-    """
-    try:
-        match = re.search(r'(\{.*\})', raw_text, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-        return json.loads(raw_text)
-    except Exception as e:
-        print(f"JSON Repair Failed: {e}")
-        # Default mock structure if total failure
-        return {
-            "hook_score": 0,
-            "hook_reasoning": "Ollama parsing failure",
-            "clarity_score": 0,
-            "clarity_reasoning": "Ollama parsing failure",
-            "conversion_score": 0,
-            "conversion_reasoning": "Ollama parsing failure",
-            "bgm_direction": "Error",
-            "editing_rhythm": "Error",
-            "script": [
-                {
-                    "time": "0s", 
-                    "visual": "Error Local LLM Output", 
-                    "audio_content": "Error", 
-                    "audio_meaning": "Error", 
-                    "text_content": "Error", 
-                    "text_meaning": "Error"
-                }
-            ],
-            "psychology_insight": "Error",
-            "cultural_notes": ["Error"],
-            "competitor_trend": "Error"
-        }
 
-def generate_with_local_llm(system_prompt: str, user_input: str, model: str = "qwen3.5:9b", expected_json: bool = True) -> str | dict:
+class LocalLLMResult(NamedTuple):
+    """Local inference result + optional provider-reported token total (Ollama OpenAI API)."""
+    output: str | dict
+    total_tokens: int | None = None
+
+
+def _truncate_excerpt(raw_text: str, max_chars: int = 500) -> str:
+    return raw_text[:max_chars] if len(raw_text) <= max_chars else f"{raw_text[:max_chars]}...[truncated]"
+
+def _build_local_error(error_code: str, error_message: str, raw_text: str = "") -> dict[str, Any]:
+    return {
+        "success": False,
+        "error_code": error_code,
+        "error_message": error_message,
+        "raw_excerpt": _truncate_excerpt(raw_text)
+    }
+
+def repair_json(raw_text: str) -> dict[str, Any]:
+    """
+    Try strict JSON parsing first, then recover from mixed text output.
+    Returns a structured error object instead of fake script content.
+    """
+    if not raw_text or not raw_text.strip():
+        return _build_local_error("LOCAL_EMPTY_OUTPUT", "Local model returned empty output.")
+
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", raw_text):
+        try:
+            parsed, _ = decoder.raw_decode(raw_text[match.start():])
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+
+    return _build_local_error(
+        "LOCAL_JSON_PARSE_FAILED",
+        "Local model output is not valid JSON.",
+        raw_text
+    )
+
+def generate_with_local_llm(system_prompt: str, user_input: str, model: str = "qwen3.5:9b", expected_json: bool = True) -> LocalLLMResult:
     """
     Calls the local Ollama via OpenAI SDK.
     - User instruction for structural enforcement is injected implicitly if JSON expected.
     """
     try:
-        print(f"🌐 Triggering LOCAL Ollama request on Model: {model}...")
+        print(f"[Ollama] Local request, model={model}")
         
         # Local model strict formatting reinforcement
         if expected_json:
@@ -70,14 +85,21 @@ def generate_with_local_llm(system_prompt: str, user_input: str, model: str = "q
         )
         
         raw_text = response.choices[0].message.content
-        print(f"🌐 LOCAL Model returned string length: {len(raw_text)}")
+        print(f"[Ollama] Response length: {len(raw_text)}")
+        tok = total_tokens_from_completion(response)
         
         if expected_json:
-            return repair_json(raw_text)
-        return raw_text
+            return LocalLLMResult(repair_json(raw_text), tok)
+        return LocalLLMResult(raw_text or "", tok)
     
     except Exception as e:
-        print(f"❌ Local Ollama Inference Failed: {e}")
+        print(f"[Ollama ERROR] Inference failed: {e}")
         if expected_json:
-            return repair_json("") # return fallback mock
-        return "Extraction failed via Ollama."
+            return LocalLLMResult(
+                _build_local_error(
+                    "LOCAL_REQUEST_FAILED",
+                    f"Local Ollama request failed: {e}"
+                ),
+                None,
+            )
+        return LocalLLMResult("Extraction failed via Ollama.", None)

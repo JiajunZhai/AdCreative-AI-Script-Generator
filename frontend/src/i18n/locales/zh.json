@@ -1,0 +1,181 @@
+{
+  "translation": {
+    "nav": {
+      "quota": "词元信息",
+      "create_workspace": "新建工作区",
+      "loading": "加载中...",
+      "dashboard": "游戏档案",
+      "lab": "脚本生成",
+      "oracle": "知识库",
+      "settings": "参数矩阵控制台",
+      "support": "技术支持",
+      "intel": "市场动态",
+      "my_projects": "我的项目",
+      "launch_lab": "开始生成",
+      "workspace_label": "工作空间",
+      "create_profile": "+ 新建项目档案",
+      "overview": "数据概览",
+      "db_context": "基础数据设定",
+      "initiate": "生成脚本",
+      "fusing": "数据读取中...",
+      "requesting": "请求生成接口中..."
+    },
+    "market": {
+      "saturation": "大盘饱和度",
+      "high_risk": "高风险预警",
+      "apply_intel": "应用市场情报",
+      "title": "实时市场监控",
+      "subtitle": "实时数据流",
+      "hook_genome": "热门视效元素=",
+      "creative_fatigue": "素材衰减指数",
+      "est_lifecycle": "预估生命周期",
+      "component_feed": "细分标签动态",
+      "sentiment_sniffer": "本地化舆情反馈",
+      "days": "天",
+      "vibe": "受众倾向",
+      "gain": "正反馈",
+      "risk": "负反馈"
+    },
+    "quota": {
+      "title": "今日已用资源",
+      "syncing": "同步用量中...",
+      "error": "无法连接后端用量接口。",
+      "tokens_remaining": "剩余 Token",
+      "provider_billed": "计费用量",
+      "estimate_padding": "估算补齐",
+      "oracle_searches": "检索次数",
+      "oracle_ingests": "数据归档次数",
+      "hover_hint": "悬停或聚焦以加载用量。"
+    },
+    "dashboard": {
+      "title": "游戏总览",
+      "subtitle": "所有输出的脚本内容将严格关联并基于当前您选中的基础方案。",
+      "pipelines": "工作流",
+      "empty": {
+        "title": "新建游戏",
+        "description": "当前游戏为空，请点击上方创建游戏。"
+      },
+      "stats": {
+        "scripts": "生成数量",
+        "er": "预估互动率%"
+      },
+      "queue": {
+        "title": "待处理任务队列",
+        "mock1": "补充缺少的分层特效日服策略",
+        "mock2": "裂变 TikTok UGC 评测变体",
+        "mock3": "审阅重度 RTL 本地化"
+      },
+      "history": {
+        "title": "近期生成记录",
+        "empty": "流水无记录",
+        "action_issue": "下发任务",
+        "action_script": "生成脚本"
+      },
+      "card_missing_base": "参数缺失",
+      "btn_launch_lab": "开始创意",
+      "btn_edit": "深度编辑/解析",
+      "btn_delete": "摧毁数据档案"
+    },
+    "lab": {
+      "title": "脚本生成",
+      "pipeline_title": "核心工作流",
+      "mixing_console": "参数控制台",
+      "db_synced": "实时同步",
+      "subtitle": "配置不同的地区、投放平台以及心理学动机（痛点/爽点），系统将自动拼接图谱参数并输出极具针对性的营销短视频剧本。",
+      "slot_a": {
+        "header": "档案数据源",
+        "title": "当前基础档案",
+        "base_params": "核心投放参数",
+        "missing": "暂无绑定项目...",
+        "view_details": "展开档案",
+        "scripts": "成片剧本"
+      },
+      "slot_b": {
+        "label": "地区槽位",
+        "title": "投放地区"
+      },
+      "slot_c": {
+        "label": "渠道槽位",
+        "title": "投放渠道"
+      },
+      "slot_d": {
+        "label": "动机槽位",
+        "title": "用户营销动机"
+      },
+      "synthesis_status": "准备参数配置中...",
+      "alert_no_project": "请先选定一个项目结构。"
+    },
+    "oracle": {
+      "title": "行业知识图谱",
+      "siphoning": "正在解析外部数据流…",
+      "intel_feed": "情报反馈池",
+      "alchemy_complete": "解析构建成功",
+      "pipeline_fault": "处理异常",
+      "global_db": "全局策略库",
+      "ready": "已就绪",
+      "utc": "UTC 标准时间",
+      "refinery": "数据处理中心",
+      "end_updates": "暂无更多变动记录",
+      "desc_1": "您可以直接输入长篇分析报告或竞品文章，由 ",
+      "desc_2": "AI 标签提取引擎",
+      "desc_3": "自动为您梳理成可在脚本生成模块中直接引用的结构化策略点。",
+      "ingestion": "数据录入",
+      "source_url": "外部数据源链接",
+      "time_horizon": "时间节点",
+      "raw_override": "本地文本参考",
+      "empty_hint": "留空系统将自动尝试抓取上方的链接源",
+      "raw_override_ph": "您也可以将整理好的多页内容或核心结论直接粘贴至此...",
+      "matrix": "全局策略参考矩阵",
+      "rag_rules": "系统已收录 {{count}} 条买量规则基准"
+    },
+    "theme": {
+      "light": "浅色主题",
+      "dark": "深色主题",
+      "system": "跟随系统",
+      "title": "外观设置"
+    },
+    "components": {
+      "pro_select_search": "搜索数据库...",
+      "pro_select_empty": "[未找到匹配记录]"
+    },
+    "setup": {
+      "title": "配置新项目档案",
+      "title_edit": "维护项目配置",
+      "mode_url": "URL 智能提取",
+      "mode_manual": "手动填写参数",
+      "url_ph": "请粘贴 Google Play 或 App Store 商店链接...",
+      "btn_analyze": "开始提取数据",
+      "analyzing": "AI 正在提取解析中...",
+      "name_label": "项目名称",
+      "name_ph": "例如：卡皮巴拉",
+      "core_gameplay": "核心玩法基底",
+      "core_gameplay_ph": "例如：合成进化 + 基地塔防",
+      "core_usp": "核心卖点",
+      "core_usp_ph": "例如：爽快割草，局外深坑",
+      "target_persona": "目标受众画像",
+      "target_persona_ph": "例如：泛休闲人群，减压诉求强烈...",
+      "value_hooks": "衍生分镜挂钩",
+      "value_hooks_ph": "其他衍生的卖点、痛点或爽点思路...",
+      "cancel": "取消",
+      "submit": "确认创建档案",
+      "submit_edit": "应用覆盖数据"
+    },
+    "param_manager": {
+      "hub_title": "参数矩阵控制台",
+      "hub_subtitle": "底层原子策略与引擎切片配置",
+      "tab_regions": "地区基因",
+      "tab_platforms": "平台渠道",
+      "tab_angles": "转化心理模型",
+      "active_atoms": "有效原子列表",
+      "document_suffix": "配置文档",
+      "saved_success": "部署成功",
+      "commit_btn": "写入原子库",
+      "json_placeholder": "在此贴入您的 JSON 结构规则...",
+      "select_placeholder": "在左侧选择一个原子进行调试或覆写",
+      "err_json": "非法的 JSON 格式",
+      "err_missing": "有效载荷缺少 'id' 或 'category'",
+      "new_entry": "新建节点",
+      "confirm_delete": "确定要销毁该节点吗？"
+    }
+  }
+}
