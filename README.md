@@ -1,4 +1,4 @@
-![logo](frontend/public/logo.png)
+<img src="frontend/public/logo.png" alt="logo" width="220" />
 
 # 🎬 AdCreative AI Script Generator
 
