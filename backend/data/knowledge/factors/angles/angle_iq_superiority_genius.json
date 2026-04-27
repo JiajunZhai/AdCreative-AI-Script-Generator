@@ -1,0 +1,30 @@
+{
+    "name": "Intellectual",
+    "short_name": "Intellectual",
+    "description": "Based on the classic conversion model of 'cognitive dissonance' and 'superiority compensation'. By showcasing extremely 'mind-numbing' operation logic, it induces users' anger and intellectual pride. Through the '1% rule', it establishes a false elite threshold, forcing users to transform from 'audience' to 'correctors' and 'challengers', achieving extremely high CTR and CVR.",
+    "focus": [
+        "Idiot Bait: deliberately display extremely low-level logical errors in the screen (such as 1+1=3, or choosing the most obvious dead end), using users' 'cognitive dissonance' to force them to correct.",
+        "Elite Labeling: establish high social currency value through copywriting like 'Only 1% can pass' or 'Level 5 = Genius', making downloading the game equivalent to an identity certification of intelligence.",
+        "Provocative Goals: use negative challenge copywriting such as 'You absolutely cannot reach pink' or 'You cannot escape in 10 seconds' to stimulate users' psychological defense mechanism of 'reverse proof'."
+    ],
+    "rules": [
+        "Audio-visual Stupid AI Performance: The virtual player (Player/AI) in the screen must appear clumsy and hesitant. At critical decision points, they should hesitate back and forth, ultimately choosing the most absurd option, maximizing users' 'screaming' engagement.",
+        "Visualized Progress Comparison: Display a real-time changing IQ score or 'Bronze/King' segment bar at the top. As the player makes mistakes, the IQ value plummets, using loss aversion psychology to stimulate users to take over themselves.",
+        "Minimalist Decision Scenarios: The scene must be clear at a glance (e.g., push-pull lock, merge upgrade, math door). The simpler the task, the more failed the performance, the stronger the 'insult' to users' intelligence, and the greater the conversion impulse."
+    ],
+    "constraints": [
+        "Absolutely forbid showing truly complex logic puzzles: if the level itself seems too difficult, users will develop fear and give up. Must be 'minimal tasks' messed up by 'extremely stupid operations'.",
+        "No direct personal attacks against the user: the mockery should target the 'operator in the screen' or 'average intelligence level', not the user themselves, to avoid triggering reverse social exclusion.",
+        "Forbid UI from overwhelming the scene: the core of the screen should focus on the 'wrong decision', removing unnecessary numerical prompts and special effects, making that 'wrong click' the only visual focus on the entire screen."
+    ],
+    "core_emotion": "Intellectual superiority, anger from error correction instinct, urge to prove oneself, aspiration for the top 1% elite class",
+    "visual_tempo": "Quickly cut to challenge interface -> Steady display of simple logic -> Stupid operation at critical moment (slow motion/hesitation) -> Red text provocation after failure -> Pop up minimalist CTA",
+    "logic_steps": [
+        "Hook (0-3s): Show label. At the top of the screen, display 'IQ 140 Test' or 'Genius Only', showing a simple level prototype.",
+        "Build-up (3-8s): Idiot performance. A virtual player attempts to solve it but shows great confusion at the simplest level and chooses an obviously wrong path.",
+        "Climax (8-11s): Failure irony. The screen turns red/gray, with a huge 'FAILED' or 'STUPID!' text, accompanied by an IQ value dropping to zero animation.",
+        "CTA (11s+): Provocative reversal. 'I bet you can't reach pink color' or 'Let me fix it' appears, and a download button forcefully pops up."
+    ],
+    "audio_strategy": "Use a stressful ticking clock sound effect. On failure, accompany with ridiculous, harsh, or mocking sound effects (such as laughter or a failure horn). The background music uses a looping, slightly urgent synthesizer to enhance anxiety.",
+    "id": "angle_iq_superiority_genius"
+}

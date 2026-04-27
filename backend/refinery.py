@@ -277,13 +277,14 @@ class KnowledgeStore:
                     json.dumps(meta, ensure_ascii=False),
                     _doc_fp(str(doc or "")),
                     now,
+                    str(meta.get("status") or "active"),
                 )
             )
         conn = get_conn()
         conn.executemany(
             """
-            INSERT OR IGNORE INTO knowledge_docs(id, doc_text, source, region, year_quarter, category, meta_json, fingerprint, created_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO knowledge_docs(id, doc_text, source, region, year_quarter, category, meta_json, fingerprint, created_at, status)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows_docs,
         )
@@ -528,6 +529,35 @@ class KnowledgeStore:
             boosted[doc_id] = s + bonus
         return boosted
 
+    def _apply_hard_priority_boost(
+        self,
+        scores: dict[str, float],
+        target_region: str | None,
+        target_platform: str | None,
+        id_to_meta: dict[str, dict[str, Any]],
+    ) -> dict[str, float]:
+        if not target_region and not target_platform:
+            return scores
+        boosted: dict[str, float] = {}
+        for doc_id, s in scores.items():
+            meta = id_to_meta.get(doc_id) or {}
+            bonus = 0.0
+            import json
+            meta_json = {}
+            if meta.get("meta_json"):
+                try:
+                    meta_json = json.loads(meta["meta_json"])
+                except:
+                    pass
+            doc_region = str(meta.get("region") or meta_json.get("metadata", {}).get("region") or "").lower()
+            doc_platforms = [str(p).lower() for p in meta_json.get("metadata", {}).get("platform", [])]
+            if target_region and target_region.lower() in doc_region:
+                bonus += 2.0
+            if target_platform and any(target_platform.lower() in p for p in doc_platforms):
+                bonus += 1.5
+            boosted[doc_id] = s + bonus
+        return boosted
+
     def _mmr_select(
         self,
         fused_scores: dict[str, float],
@@ -602,6 +632,8 @@ class KnowledgeStore:
         query_texts: list[str],
         n_results: int = 3,
         region_boost_tokens: list[str] | None = None,
+        target_region: str | None = None,
+        target_platform: str | None = None,
     ) -> dict[str, list[list[Any]]]:
         items = self._load_all()
         if not items:
@@ -631,6 +663,7 @@ class KnowledgeStore:
 
             fused = self._rrf_fuse([bm25_ranked, vector_ranked], k=rrf_k)
             fused = self._apply_region_boost(fused, region_boost_tokens, id_to_meta)
+            fused = self._apply_hard_priority_boost(fused, target_region, target_platform, id_to_meta)
 
             picked = self._mmr_select(fused, top_k=n_results, id_to_text=id_to_text)
             picked = self._rerank_cross_encoder(q, picked, id_to_text)[: n_results]
@@ -730,7 +763,7 @@ def ensure_seeded() -> dict[str, Any]:
     return res
 
 
-def distill_and_store(raw_text: str, source_url: str, year_quarter: str = "Unknown Date"):
+def distill_and_store(raw_text: str, source_url: str, year_quarter: str = "Unknown Date", mark_pending: bool = False):
     """Distill a raw UA report into atomic insights and persist them."""
     from openai import OpenAI
 
@@ -749,21 +782,41 @@ def distill_and_store(raw_text: str, source_url: str, year_quarter: str = "Unkno
     You are a Master Mobile Game User Acquisition Strategist.
     I will provide you with a raw industry report, competitor analysis, or market research text.
     You must distill the core 'Creative Genes' (execution rules) out of it.
+    
+    CRITICAL INSTRUCTIONS:
+    1. Base your core strategy and logic STRICTLY on the provided raw text. Do not guess or hallucinate strategies that are not mentioned in the material.
+    2. Leverage your intrinsic knowledge of different regions, channels (TikTok, Meta, etc.), and platforms to enrich the 'negative_constraints' and 'actionable_advice'. You know what is strictly forbidden or highly recommended in specific regions/platforms—apply this knowledge to contextualize the raw material.
+    
     Format your response STRICTLY as a JSON array of objects representing atomic insights.
 
     Each object must have:
     {
-      "tier": "<Assign Tier 1 (Gold Standard), Tier 2 (Competitive Intel), or Tier 3 (Platform Guidelines)>",
-      "game_type": "<Game Genre/Type>",
-      "region": "<Target region this applies to, e.g., Japan, Global, MENA>",
-      "angle": "<Psychological Angle>",
-      "performance_level": "<High, Mid, Low based on report>",
-      "script_logic": {
-        "hook": "<First 3 seconds hook>",
-        "build_up": "<Body/Escalation>",
-        "climax": "<Peak action/Payoff>",
-        "cta": "<Call to action>"
-      }
+      "metadata": {
+        "region": "<Target region this applies to, e.g., Japan, Global, MENA>",
+        "platform": ["<Must be an array of platforms, e.g. ['TikTok', 'Meta']>"],
+        "language": "<Language, e.g. English, Chinese>",
+        "rank_type": "<One of: winner (王牌高转化), benchmark (行业基准), disruptive (颠覆创新), core (核心策略), trending (趋势风向)>",
+        "tier": <1-3 rank>
+      },
+      "strategy": {
+        "tags": ["<Categorical tags, e.g. 'Opening', 'Transition'>"],
+        "trigger": "<Psychological Trigger>",
+        "hook_logic": "<The core creative logic of the hook>"
+      },
+      "execution_template": {
+        "visual_flow": [
+          {"scene": "Opening", "desc": "<What to show>"},
+          {"scene": "Body/Climax", "desc": "<What happens next>"}
+        ],
+        "bgm_style": "<BGM/Audio details>",
+        "cta_style": "<Call to action details>",
+        "negative_constraints": ["<Absolute taboos or limits based on your platform/region knowledge>"]
+      },
+      "evidence": {
+        "confidence": <0-100 logic score>
+      },
+      "rank_type": "<Classify as 'trending', 'core', or 'fading' based on freshness and impact>",
+      "actionable_advice": "<One short specific sentence on applying this to script>"
     }
 
     CRITICAL: Output ONLY valid JSON array starting with `[` and ending with `]`. No markdown wrappers.
@@ -805,16 +858,50 @@ def distill_and_store(raw_text: str, source_url: str, year_quarter: str = "Unkno
         metadatas: list[dict[str, Any]] = []
         ids: list[str] = []
         for insight in insights:
-            doc_str = (
-                f"[{insight.get('region', 'Global')}] Style: {insight.get('style', '')} - "
-                f"{insight.get('logic', '')} (Why: {insight.get('psychology', '')})"
-            )
+            meta_obj = insight.get('metadata', {})
+            strat_obj = insight.get('strategy', {})
+            region = meta_obj.get('region', 'Global')
+            lang = meta_obj.get('language', 'English')
+            cat_tag = strat_obj.get('tags', ['General'])[0] if strat_obj.get('tags') else 'General'
+            
+            # Robust platform extraction: ensure it's a list and check text fallbacks
+            platforms = meta_obj.get('platform', [])
+            if isinstance(platforms, str):
+                platforms = [platforms]
+            
+            # Text-based fallback for common platforms if metadata is sparse
+            content_lower = str(insight).lower()
+            if not platforms:
+                if "tiktok" in content_lower: platforms.append("TikTok")
+                if "meta" in content_lower or "facebook" in content_lower: platforms.append("Meta")
+                if "google" in content_lower or "ac" in content_lower: platforms.append("Google AC")
+            
+            # Update meta_obj to ensure platform is always a list for the UI
+            meta_obj['platform'] = list(set(platforms))
+            insight['metadata'] = meta_obj
+            
+            # Build Markdown representation (Clean, no redundant prefixes)
+            doc_lines = [
+                f"Hook Logic: {strat_obj.get('hook_logic', '')}",
+                f"Psychological Trigger: {strat_obj.get('trigger', 'N/A')}",
+                "Execution Flow:"
+            ]
+            flow = insight.get('execution_template', {}).get('visual_flow', [])
+            for f in flow:
+                doc_lines.append(f"- {f.get('scene', 'Scene')}: {f.get('desc', '')}")
+            
+            doc_str = "\n".join(doc_lines)
+            
             documents.append(doc_str)
             metadatas.append(
                 {
                     "source": source_url,
-                    "region": insight.get("region", "Global"),
+                    "region": region,
+                    "language": lang,
+                    "category": cat_tag,
                     "year_quarter": year_quarter,
+                    "status": "pending" if mark_pending else "active",
+                    "meta_json": json.dumps(insight, ensure_ascii=False)
                 }
             )
             ids.append(str(uuid.uuid4()))
@@ -879,6 +966,7 @@ def retrieve_context_with_evidence(
     region_boost_tokens: list[str] | None = None,
     angle_id: str | None = None,
     region_id: str | None = None,
+    target_platform: str | None = None,
 ) -> tuple[str, list[str], list[dict]]:
     """Hybrid retrieval with query expansion + reason-tag grouping.
 
@@ -897,6 +985,8 @@ def retrieve_context_with_evidence(
             query_texts=[full_q],
             n_results=top_k,
             region_boost_tokens=region_boost_tokens,
+            target_region=region_id,
+            target_platform=target_platform,
         )
         if not results or not results.get("documents") or not results["documents"][0]:
             return "", [], []
@@ -956,6 +1046,7 @@ def retrieve_context(
     region_boost_tokens: list[str] | None = None,
     angle_id: str | None = None,
     region_id: str | None = None,
+    target_platform: str | None = None,
 ) -> tuple[str, list[str]]:
     context, citations, _ = retrieve_context_with_evidence(
         query_string,
@@ -964,6 +1055,7 @@ def retrieve_context(
         region_boost_tokens=region_boost_tokens,
         angle_id=angle_id,
         region_id=region_id,
+        target_platform=target_platform,
     )
     return context, citations
 
@@ -983,6 +1075,9 @@ def rebuild_vectors() -> dict[str, Any]:
 
 def get_collection_stats() -> dict:
     total = collection.count()
+    active_count = fetchone("SELECT COUNT(*) AS n FROM knowledge_docs WHERE status = 'active'")["n"] or 0
+    pending_count = fetchone("SELECT COUNT(*) AS n FROM knowledge_docs WHERE status = 'pending'")["n"] or 0
+    
     recent_rows = fetchall(
         "SELECT id, doc_text, source, region, year_quarter, category FROM knowledge_docs ORDER BY created_at DESC LIMIT 10"
     )
@@ -1016,6 +1111,8 @@ def get_collection_stats() -> dict:
         )
     return {
         "total_rules": total,
+        "active_count": active_count,
+        "pending_count": pending_count,
         "recent_intel": recent,
         "retrieval_backend": collection.rag_backend,
         "embedding_model": collection.embedding_model_id,
@@ -1023,4 +1120,276 @@ def get_collection_stats() -> dict:
         "vectors": collection.vector_count(),
         "rerank": "on" if _rerank_enabled() else "off",
         "rerank_model": _rerank_model_id() if _rerank_enabled() else None,
+    }
+
+
+def search_intel(query: str = "", limit: int = 50, region: str = "", tag: str = "", status: str = "active") -> list[dict[str, Any]]:
+    sql = "SELECT id, doc_text, source, region, year_quarter, category, meta_json FROM knowledge_docs WHERE status = ?"
+    params = [status]
+    
+    if query:
+        sql += " AND (doc_text LIKE ? OR id = ? OR category LIKE ?)"
+        params.extend([f"%{query}%", query, f"%{query}%"])
+        
+    if region:
+        sql += " AND region = ?"
+        params.append(region)
+        
+    if tag:
+        sql += " AND category LIKE ?"
+        params.append(f"%{tag}%")
+        
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    
+    recent_rows = fetchall(sql, tuple(params))
+    
+    recent: list[dict[str, Any]] = []
+    for r in recent_rows:
+        cat = str(r["category"] or "")
+        reg = r["region"] or "Global"
+        t = cat or "General"
+        
+        import json
+        meta = {}
+        try:
+            if r["meta_json"]:
+                meta = json.loads(r["meta_json"])
+        except:
+            pass
+
+        rank = meta.get("rank_type") or "core"
+        advice = meta.get("actionable_advice") or ""
+
+        doc = r["doc_text"] or ""
+        
+        # Use hook logic as title if available, otherwise clean doc_text
+        title = ""
+        if "strategy" in meta and meta["strategy"].get("hook_logic"):
+            title = meta["strategy"]["hook_logic"]
+        else:
+            # Strip legacy prefixes like "Region: Global, Platform: TikTok\nStrategy Hook: ..."
+            clean = re.sub(r'^Region:.*?\\n', '', doc).strip()
+            clean = re.sub(r'^Strategy Hook:\s*', '', clean).strip()
+            clean = re.sub(r'^Hook Logic:\s*', '', clean).strip()
+            title = clean[:80] + "..." if len(clean) > 80 else clean
+
+        recent.append(
+            {
+                "id": str(r["id"]),
+                "region": reg,
+                "tag": t,
+                "title": title,
+                "content": doc,
+                "category": cat,
+                "language": meta.get("metadata", {}).get("language") or meta.get("language", ""),
+                "time": r["year_quarter"] or "N/A",
+                "link": r["source"] or "#",
+                "source": "Oracle Vault",
+                "stat": "Active", 
+                "rank_type": rank,
+                "actionable_advice": advice,
+                "dna": meta
+            }
+        )
+    return recent
+
+
+def update_intel(doc_id: str, data: dict[str, Any]) -> bool:
+    content = data.get("content")
+    region = data.get("region")
+    category = data.get("category")
+    year_quarter = data.get("time") 
+    status = data.get("status")
+        
+    if not doc_id: return False
+    
+    updates = []
+    params = []
+    if content is not None:
+        updates.append("doc_text = ?")
+        params.append(str(content))
+    if region is not None:
+        updates.append("region = ?")
+        params.append(str(region))
+    if category is not None:
+        updates.append("category = ?")
+        params.append(str(category))
+    if year_quarter is not None:
+        updates.append("year_quarter = ?")
+        params.append(str(year_quarter))
+    if status is not None:
+        updates.append("status = ?")
+        params.append(str(status))
+        
+    if not updates:
+        return True
+        
+    params.append(doc_id)
+    sql = f"UPDATE knowledge_docs SET {', '.join(updates)} WHERE id = ?"
+    from db import get_conn
+    from db import has_fts_table
+    conn = get_conn()
+    conn.execute(sql, tuple(params))
+    
+    # Invalidate vector memory matrices
+    collection._vector_matrix = None
+    collection._vector_doc_ids = []
+    
+    if content is not None and has_fts_table():
+        # Because we use ON CONFLICT REPLACE in original FTS inserts, here we just UPDATE. 
+        # But maybe the FTS row doesn't exist if it was deleted. So safely try UPDATE.
+        conn.execute("UPDATE knowledge_fts SET doc_text = ?, region = ? WHERE doc_id = ?", (str(content), str(region or ""), doc_id))
+    
+    return True
+
+
+def clear_intel(status: str | None = None) -> bool:
+    from db import get_conn, has_fts_table
+    conn = get_conn()
+    
+    if status:
+        # Get IDs to clear from FTS manually
+        rows = conn.execute("SELECT id FROM knowledge_docs WHERE status = ?", (status,)).fetchall()
+        doc_ids = [r["id"] for r in rows]
+        
+        conn.execute("DELETE FROM knowledge_docs WHERE status = ?", (status,))
+        if has_fts_table() and doc_ids:
+            # SQLite doesn't support multiple IDs in one DELETE easily without IN clause
+            placeholders = ",".join(["?"] * len(doc_ids))
+            conn.execute(f"DELETE FROM knowledge_fts WHERE doc_id IN ({placeholders})", tuple(doc_ids))
+    else:
+        conn.execute("DELETE FROM knowledge_docs")
+        conn.execute("DELETE FROM knowledge_vectors")
+        if has_fts_table():
+            conn.execute("DELETE FROM knowledge_fts")
+            
+    collection._vector_matrix = None
+    collection._vector_doc_ids = []
+    return True
+
+
+def backfill_intel_tags() -> dict[str, Any]:
+    """Re-analyze all existing intel items via LLM to enrich missing metadata tags.
+
+    This is a one-shot migration tool: it reads every knowledge_doc, sends its
+    text to the LLM for lightweight metadata extraction, and updates the
+    meta_json / category / region columns in-place.  Items that already have
+    rich metadata (platform array populated) are skipped to save tokens.
+    """
+    from openai import OpenAI
+
+    cloud_client = (
+        OpenAI(
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        )
+        if os.getenv("DEEPSEEK_API_KEY")
+        else None
+    )
+    if not cloud_client:
+        return {"success": False, "error": "DeepSeek API Key not configured."}
+
+    enrich_prompt = """You are a metadata tagger for mobile game user-acquisition creative intelligence.
+
+Given the following intelligence text, output a JSON object with ONLY these fields:
+{
+  "region": "<Target region, e.g. Japan, Global, MENA, SEA, US, LATAM>",
+  "platform": ["<Array of ad platforms mentioned or implied, e.g. TikTok, Meta, Google AC, Unity Ads>"],
+  "language": "<Primary language of the content, e.g. English, Chinese, Japanese>",
+  "rank_type": "<One of: winner, benchmark, disruptive, core, trending>",
+  "tier": <1 for proven winner, 2 for strong signal, 3 for hypothesis>,
+  "category": "<Primary category tag, e.g. Hook, Opening, Transition, CTA, UGC, Gameplay, Narrative>"
+}
+
+Rules:
+- Infer platform from context clues (e.g. "short video" -> TikTok, "feed ads" -> Meta).
+- If no platform is clearly identifiable, use ["General"].
+- rank_type should reflect the strategic weight: 'winner' for proven high-conversion, 'benchmark' for industry standard, 'disruptive' for innovative/breaking, 'core' for fundamental, 'trending' for rising.
+- Output ONLY the JSON object. No markdown, no explanation."""
+
+    from db import get_conn
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, doc_text, region, category, meta_json FROM knowledge_docs"
+    ).fetchall()
+
+    updated = 0
+    skipped = 0
+    errors = 0
+
+    for r in rows:
+        doc_id = r["id"]
+        doc_text = r["doc_text"] or ""
+        old_meta_json = r["meta_json"] or "{}"
+
+        # Parse existing meta
+        try:
+            existing_meta = json.loads(old_meta_json)
+        except Exception:
+            existing_meta = {}
+
+        # Skip if already has rich platform data (not empty, not placeholder)
+        existing_platforms = existing_meta.get("metadata", {}).get("platform", [])
+        if isinstance(existing_platforms, list) and len(existing_platforms) > 0:
+            first = existing_platforms[0] if existing_platforms else ""
+            if first and first not in ("", "General"):
+                skipped += 1
+                continue
+
+        # Send to LLM for enrichment
+        try:
+            response = cloud_client.chat.completions.create(
+                model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+                messages=[
+                    {"role": "system", "content": enrich_prompt},
+                    {"role": "user", "content": f"Intelligence text:\n\n{doc_text[:4000]}"},
+                ],
+            )
+            raw_output = response.choices[0].message.content
+            # Extract JSON object
+            match = re.search(r"(\{.*\})", raw_output, re.DOTALL)
+            if not match:
+                errors += 1
+                continue
+            tags = json.loads(match.group(1))
+        except Exception as e:
+            print(f"[backfill] LLM error for {doc_id}: {e}")
+            errors += 1
+            continue
+
+        # Merge enriched tags into existing meta
+        new_region = tags.get("region", r["region"] or "Global")
+        new_category = tags.get("category", r["category"] or "General")
+
+        # Update metadata sub-object
+        if "metadata" not in existing_meta:
+            existing_meta["metadata"] = {}
+        existing_meta["metadata"]["region"] = new_region
+        existing_meta["metadata"]["platform"] = tags.get("platform", ["General"])
+        existing_meta["metadata"]["language"] = tags.get("language", "English")
+        existing_meta["metadata"]["tier"] = tags.get("tier", 2)
+
+        # Update top-level rank_type
+        existing_meta["rank_type"] = tags.get("rank_type", "core")
+
+        new_meta_json = json.dumps(existing_meta, ensure_ascii=False)
+
+        # Write back to DB
+        conn.execute(
+            "UPDATE knowledge_docs SET region = ?, category = ?, meta_json = ? WHERE id = ?",
+            (new_region, new_category, new_meta_json, doc_id),
+        )
+        updated += 1
+
+    # Invalidate caches
+    collection._vector_matrix = None
+    collection._vector_doc_ids = []
+
+    return {
+        "success": True,
+        "total": len(rows),
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors,
     }

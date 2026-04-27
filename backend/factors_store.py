@@ -122,7 +122,7 @@ def read_insight(insight_id: Optional[str]) -> dict[str, Any]:
     """
     if not insight_id:
         return {}
-    row = fetchone("SELECT data_json FROM factors WHERE id = ? AND enabled = 1", (insight_id,))
+    row = fetchone("SELECT data_json FROM factors WHERE id = ? AND enabled = 1 AND archived_at IS NULL", (insight_id,))
     if row is None:
         return {}
     try:
@@ -134,7 +134,7 @@ def read_insight(insight_id: Optional[str]) -> dict[str, Any]:
 
 def list_by_type(factor_type: str) -> list[dict[str, Any]]:
     rows = fetchall(
-        "SELECT id, short_name, name, data_json FROM factors WHERE type = ? AND enabled = 1 ORDER BY id",
+        "SELECT id, short_name, name, data_json FROM factors WHERE type = ? AND enabled = 1 AND archived_at IS NULL ORDER BY id",
         (factor_type,),
     )
     out: list[dict[str, Any]] = []
@@ -213,6 +213,6 @@ def seed_from_filesystem(*, force: bool = False) -> dict[str, Any]:
 
 def stats() -> dict[str, Any]:
     rows = fetchall(
-        "SELECT type, COUNT(*) AS n FROM factors WHERE enabled = 1 GROUP BY type"
+        "SELECT type, COUNT(*) AS n FROM factors WHERE enabled = 1 AND archived_at IS NULL GROUP BY type"
     )
     return {r["type"]: int(r["n"]) for r in rows}

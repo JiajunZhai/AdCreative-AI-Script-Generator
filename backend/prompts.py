@@ -105,12 +105,31 @@ def _render_avoid_terms_block(avoid_terms: list[str] | None) -> str:
     """
 
 
-def render_draft_prompt(game_context: str, culture_context: Dict[str, Any], platform_rules: Dict[str, Any], creative_logic: Dict[str, Any]) -> str:
+def render_draft_prompt(
+    game_context: str, 
+    culture_context: Dict[str, Any], 
+    platform_rules: Dict[str, Any], 
+    creative_logic: Dict[str, Any],
+    video_duration: str | None = None,
+    scene_count: str | None = None,
+    user_prompt: str | None = None,
+) -> str:
     """
     Stage-1 fast ideation prompt:
     output concise hook/storyboard skeletons for later director expansion.
     """
     base, _culture_notes, _platform_specs = _build_common_context(game_context, culture_context, platform_rules, creative_logic)
+    
+    constraints_section = ""
+    if video_duration or scene_count or user_prompt:
+        constraints_section = "[USER CONSTRAINTS]\n"
+        if video_duration:
+            constraints_section += f"- Target Video Duration: {video_duration}\n"
+        if scene_count:
+            constraints_section += f"- Target Scene Count: {scene_count}\n"
+        if user_prompt:
+            constraints_section += f"- Specific Constraints: {user_prompt}\n"
+
     return f"""
     You are a performance creative strategist for mobile UA.
     Generate concise ad concept drafts first, not full production script.
@@ -119,6 +138,7 @@ def render_draft_prompt(game_context: str, culture_context: Dict[str, Any], plat
     {INJECTION_GUARD}
 
     {base}
+    {constraints_section}
 
     Output ONLY valid JSON:
     {{
@@ -131,7 +151,8 @@ def render_draft_prompt(game_context: str, culture_context: Dict[str, Any], plat
           "gameplay_bridge": "<how hook transitions to true gameplay>",
           "risk_flags": ["<possible policy or logic risk>"],
           "estimated_ctr": <int 0-100>,
-          "estimated_quality": <int 0-100>
+          "estimated_quality": <int 0-100>,
+          "reasoning": "<why this concept works for this market and angle in 1-2 sentences>"
         }}
       ],
       "pick_recommendation": "<id of best draft>"
@@ -150,11 +171,26 @@ def render_director_prompt(
     creative_logic: Dict[str, Any],
     selected_draft_json: str = "",
     avoid_terms: list[str] | None = None,
+    video_duration: str | None = None,
+    scene_count: str | None = None,
+    user_prompt: str | None = None,
+    output_mode: str = "cn",
 ) -> str:
     """
     Stage-2 director prompt: build final production script.
     """
     base, _culture_notes, _platform_specs = _build_common_context(game_context, culture_context, platform_rules, creative_logic)
+    
+    constraints_section = ""
+    if video_duration or scene_count or user_prompt:
+        constraints_section = "[USER CONSTRAINTS]\n"
+        if video_duration:
+            constraints_section += f"- Target Video Duration: {video_duration}\n"
+        if scene_count:
+            constraints_section += f"- Target Scene Count: {scene_count}\n"
+        if user_prompt:
+            constraints_section += f"- Specific Constraints: {user_prompt}\n"
+
     draft_section = ""
     if selected_draft_json.strip():
         draft_section = f"""
@@ -162,29 +198,41 @@ def render_director_prompt(
     {wrap_user_input(selected_draft_json, label="selected_draft")}
     """
     avoid_section = _render_avoid_terms_block(avoid_terms)
+    duration_str = video_duration or "15s-30s"
+    
+    target_lang = "Chinese" if output_mode.lower() == "cn" else "English"
+    
     return f"""
-    You are an expert Mobile Game User Acquisition (UA) Director with 10 years of experience.
-    Your audience is a DOMESTIC VIDEO EDITOR (Chinese/English speaking).
+    [战略合成模式启动]
+
+    【角色设定】
+    你是一位深谙[{culture_context.get('name', 'Global')}]文化、精通[{platform_rules.get('name', 'Generic')}]算法逻辑、且擅长[{creative_logic.get('name', 'Standard')}]动机策略的顶级买量导演。
+    你的受众是国内后期的视频剪辑师（中英双语）。
+
+    【合成指令】
+    你的任务是将[Project DNA - Baseline]中的核心卖点，通过[Market Context]（Oracle 爆款逻辑）进行基因转译，战略合成并产出一个时长为[{duration_str}]的爆款脚本。
+    所有脚本内容（包括对白、配音、贴纸、以及导演说明等）必须使用[{target_lang}]输出！
+
+    【硬核约束】
+    1. 必须包含一个由[{creative_logic.get('name', 'Standard')}]定义的强有力 Hook。
+    2. 必须绝对规避[{culture_context.get('name', 'Global')}]地区的 Taboo（禁忌），以及【COMPLIANCE NEGATIVE LIST】。
+    3. 严禁使用虚假的系统原生 UI（如低电量警告、系统弹窗等）。
+    4. Hook 可以很夸张，但必须在 1-2 个镜头内与游戏真实玩法逻辑接轨。
+
+    【结果要求：导演潜台词】
+    输出不仅仅是画面对白，必须包含你的“导演潜台词”！
+    在 JSON 的 `hook_reasoning` / `bgm_direction` / `editing_rhythm` 以及每个分镜的 `direction_note` 中，必须明确指出：
+    - 为什么要这么剪？（背后的心理暗示是什么？）
+    - 为什么用这个 BGM 或音效？（要渲染什么样的情绪？）
+    - 这个动作为什么能引发点击和转化？
 
     [INPUT HANDLING]
     {INJECTION_GUARD}
 
     {base}
     {draft_section}
+    {constraints_section}
     {avoid_section}
-
-    [GENE GRAFTING PROTOCOL (Conflict Resolution)]
-    If the [Project DNA - Baseline] contains "[Market Context from Vector Intelligence]", you MUST execute Gene Grafting:
-    1. The core mechanics of the game MUST remain based on the original game info constraints.
-    2. However, you MUST graft (inject) the visual hooks, trends, and mechanics found in the Market Context.
-    3. If there is a direct conflict (e.g. game is "Hardcore Strategy" but Market Context suggests "Comedic Fail-bait"), keep game truthfulness first and then adapt the trend wrapper.
-
-    [QUALITY + COMPLIANCE GUARDRAILS]
-    - Never use fake OS/system-native UI bait (e.g., fake low battery alert, fake phone call, fake system warning).
-    - Hook can be dramatic, but must remain logically connected to game mechanics within 1-2 shots.
-    - For ASMR / stress-relief mechanics, provide longer shot duration for tactile payoff (usually 1.5s-2.0s each in showcase phase).
-    - Avoid animal-abuse tone. If using "rescue/fail" hook, keep the character comedic/resilient rather than cruel/despairing.
-    - Prefer production-ready direction over literal translation.
 
     Your task is to generate a highly detailed, localized "Bilingual Bridge Script" outputting ONLY valid JSON formatting without markdown blocks.
     
@@ -199,30 +247,30 @@ def render_director_prompt(
         "bgm_direction": "<str>",
         "editing_rhythm": "<str>",
         "ad_copy_matrix": {{
-            "primary_texts": ["<at least 5 long-form primary texts in different styles: rescue, iq, asmr, benefit, minimal>"],
-            "headlines": ["<at least 10 short high-CTR headlines WITH emoji>"],
-            "hashtags": ["<at least 20 global high-frequency search hashtags>"],
+            "primary_texts": ["<at least 5 long-form primary texts in {target_lang}, in styles: rescue, iq, asmr, benefit, minimal>"],
+            "headlines": ["<at least 10 short high-CTR headlines in {target_lang} WITH emoji>"],
+            "hashtags": ["<at least 20 global high-frequency search hashtags in {target_lang}>"],
             "visual_stickers": [
                 {{
                     "shot_index": <int 0-based>,
-                    "sticker_text": "<impactful sticker text (e.g., Level 1 vs Level 99, Huge Win, Scared?)>",
-                    "sticker_meaning_cn": "<Chinese meaning/intent for editor>"
+                    "sticker_text": "<impactful sticker text in {target_lang} (e.g., Level 1 vs Level 99, Huge Win, Scared?)>",
+                    "sticker_meaning_cn": "<{target_lang} meaning/intent for editor>"
                 }}
             ]
         }},
         "script": [
             {{
                 "time": "0s",
-                "visual": "<English shot description for production>",
-                "visual_meaning": "<Chinese director-facing visual instruction>",
-                "audio_content": "<ACTUAL Native Voiceover text>",
-                "audio_meaning": "<Chinese meaning + delivery emotion guidance>",
-                "text_content": "<Sticker Text (impactful on-screen sticker words, MUST be present for every shot)>",
-                "text_meaning": "<Chinese meaning of Sticker Text>",
+                "visual": "<{target_lang} shot description for production>",
+                "visual_meaning": "<{target_lang} director-facing visual instruction>",
+                "audio_content": "<ACTUAL {target_lang} Voiceover text>",
+                "audio_meaning": "<{target_lang} meaning + delivery emotion guidance>",
+                "text_content": "<Sticker Text in {target_lang} (impactful on-screen sticker words, MUST be present for every shot)>",
+                "text_meaning": "<{target_lang} meaning of Sticker Text>",
                 "sticker_text": "<same as text_content (explicit sticker field, MUST be present)>",
-                "sticker_meaning": "<same as text_meaning (Chinese meaning)>",
-                "direction_note": "<Chinese director note: pacing/camera/performance>",
-                "sfx_transition_note": "<Chinese post note: SFX, pause, transition, beat>"
+                "sticker_meaning": "<same as text_meaning ({target_lang} meaning)>",
+                "direction_note": "<{target_lang} director note: pacing/camera/performance>",
+                "sfx_transition_note": "<{target_lang} post note: SFX, pause, transition, beat>"
             }}
         ],
         "psychology_insight": "<str>",
@@ -305,6 +353,9 @@ def render_copy_prompt(
     platform_rules: Dict[str, Any],
     creative_logic: Dict[str, Any],
     quantity: int = 20,
+    primary_text_count: int = 5,
+    headline_count: int = 10,
+    hashtag_count: int = 20,
     tones: list[str] | None = None,
     locales: list[str] | None = None,
     base_script_context: str = "",
@@ -315,11 +366,13 @@ def render_copy_prompt(
     - Focus on click desire, diversity, and transcreation for locales.
     """
     base, _culture_notes, _platform_specs = _build_common_context(game_context, culture_context, platform_rules, creative_logic)
-    q = max(5, min(int(quantity or 20), 200))
+    q_headlines = max(5, min(int(headline_count or 10), 200))
+    q_primary = max(1, min(int(primary_text_count or 5), 50))
+    q_hashtags = max(5, min(int(hashtag_count or 20), 100))
     tone_list = [t.strip() for t in (tones or []) if str(t).strip()]
     locale_list = [l.strip() for l in (locales or []) if str(l).strip()]
     tones_line = ", ".join(tone_list) if tone_list else "humor, pro, clickbait, benefit-driven, FOMO"
-    locales_line = ", ".join(locale_list) if locale_list else "en"
+    locales_line = ", ".join(locale_list) if locale_list else f"Native Language of {culture_context.get('name', 'the Target Region')}"
     script_section = ""
     if base_script_context.strip():
         script_section = f"""
@@ -342,7 +395,9 @@ def render_copy_prompt(
     {avoid_section}
 
     TARGETS:
-    - Quantity of headlines per locale: {q}
+    - Primary Texts Quantity per locale: {q_primary}
+    - Headlines Quantity per locale: {q_headlines}
+    - Hashtags Quantity per locale: {q_hashtags}
     - Tone preferences: {tones_line}
     - Locales: {locales_line}
 
@@ -364,9 +419,9 @@ def render_copy_prompt(
         "locales": ["en"],
         "variants": {{
           "en": {{
-            "primary_texts": ["... (>=5, 5 styles)"],
-            "headlines": ["... (exactly {q}, include emoji)"],
-            "hashtags": ["... (>=20, start with #)"]
+            "primary_texts": ["... (exactly {q_primary}, {q_primary} styles)"],
+            "headlines": ["... (exactly {q_headlines}, include emoji)"],
+            "hashtags": ["... (exactly {q_hashtags}, start with #)"]
           }}
         }}
       }}
@@ -374,8 +429,8 @@ def render_copy_prompt(
 
     RULES:
     - For EACH locale:
-      - primary_texts: at least 5 items
-      - headlines: exactly {q} items, each must include at least one emoji
-      - hashtags: at least 20 items, each starts with '#'
+      - primary_texts: exactly {q_primary} items
+      - headlines: exactly {q_headlines} items, each must include at least one emoji
+      - hashtags: exactly {q_hashtags} items, each starts with '#'
     - Ensure the TOP 5 headlines share core keywords with each other (for A/B themed testing).
     """

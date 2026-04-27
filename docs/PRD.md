@@ -82,20 +82,20 @@ Dashboard 右侧「生成记录管理」
 - **[F1.2] URL 抓取**：`POST /api/extract-url`（`backend/scraper.py` + `backend/main.py`）
   - 优先走云端 DeepSeek + `EXTRACT_USP_VIA_LLM_SYSTEM_PROMPT`（结构化 JSON 校验）。
   - 云端未配置或调用失败 → 回落到确定性规则抽取（Bilingual Director Archive，避免随机 hook）。
-- **[F1.3] 投放参数选择**（`frontend/src/pages/Lab.tsx` 参数控制台）：
-  - **Region**（`data/knowledge/factors/regions`）
-  - **Platform**（`data/knowledge/factors/platforms`）
-  - **Angle**（`data/knowledge/factors/angles`）
-  - **Output Type**：`Full SOP` / `Quick Copy`
-  - **Output Mode**：`cn` / `en`
-  - **Gen Mode**（仅 SOP）：`auto` / `draft` / `director`
+- **[F1.3] 投放参数选择**（`frontend/src/pages/Lab.tsx` 与 `CopyLab.tsx`）：
+  - **核心矩阵因子（参数共振）**：
+    - **Region**（`data/knowledge/factors/regions`）
+    - **Platform**（`data/knowledge/factors/platforms`）
+    - **Angle**（`data/knowledge/factors/angles`）
+  - **分镜脚本专属配置（高自由度）**：支持视频时长、分镜数量、用户提示（User Prompt）等自由度极高的定制化参数；**Gen Mode** 支持 `auto` / `draft` / `director`。
+  - **文案模式专属配置（量化与语言解耦）**：支持配置广告文案数量、广告标题数量、广告标签（关键词、卖点）数量。支持**生成语言解耦**（即用户可以选择“巴西”地区因子，但强行配置输出为“英语”，以覆盖将英语作为通用语的目标受众）。
 
 ### 3.3 模块三：AI 创意引擎 (Core Engine) ✅
 
-- **[F2.1] 1+1+3 生成链路**（Phase 19）
-  - `1` 项目/游戏 DNA（workspace）
-  - `1` Oracle RAG（向量知识库，`backend/refinery.py`，TF-IDF，带证据）
-  - `3` Region × Platform × Angle 因子 JSON（`backend/data/knowledge/factors/*`）
+- **[F2.1] 核心生成链路**（Phase 19）
+  - **游戏档案**：提取当前项目的项目/游戏 DNA（workspace）。
+  - **情报检索**：Oracle RAG（向量知识库索引，`backend/refinery.py`，TF-IDF/Vector混合检索，提供素材证据）。
+  - **三大策略因子构建**：结合 Region（视频投放地区）× Platform（投放平台）× Angle（受众心理转化动机角度），使用心理转化策略模型进行草案内容构建。
 - **[F2.2] Prompt 拆分**（`backend/prompts.py`）
   - `render_draft_prompt` → 轻量草案 JSON（多 hook 候选 + `pick_recommendation`）
   - `render_director_prompt` → 最终分镜导演稿（可注入入选草案）
@@ -145,10 +145,11 @@ Dashboard 右侧「生成记录管理」
 
 ### 3.8 模块八：合规扫描 (Compliance) ✅
 
-- **[F8.1] 规则层**（`backend/compliance.py` + `backend/data/compliance/risk_terms.json`）：
-  - `build_ad_copy_tiles` / `scan_ad_copy` 返回 `{ risk_level: ok|warn|block, hits: [...] }`。
-  - 覆盖 global / platform_overrides / region_overrides。
-- **[F8.2] LLM 改写建议**（可选）：`compliance_suggest=true` 且 cloud 引擎可用 → `maybe_generate_rewrite_suggestions` 产出 `suggestions[]`。
+- **[F8.1] 规则层与双轨审查闭环**（`backend/compliance.py` + `backend/data/compliance/risk_terms.json`）：
+  - **默认拦截机制**：脚本生成与文案生成均**默认开启合规风控拦截**。即 LLM 首次产出脚本草案或文案后，必须交由合规中心进行二次审核。
+  - **审查与修正**：`build_ad_copy_tiles` / `scan_ad_copy` 返回风险评级（ok|warn|block）。若命中风险，系统将强制根据合规扫描结果利用 LLM 进行修正，确保产出安全的最终素材。
+- **[F8.2] 知识库反哺迭代**（闭环核心）：
+  - 审核过程暴露出的风险点及被拒理由（拒审点），将通过合规中心反向更新至对应知识库的情报库下。这种持续迭代机制确保了情报库的时效性与准确性，进而保障后续高效率的安全生成。
 - **[F8.3] 前端可视化**：结果页 badge + 点开查看 Hit 列表 + 改写建议（复制/应用）。
 
 ### 3.9 模块九：用量与成本治理 (Quota & Usage) ✅
@@ -290,16 +291,17 @@ Dashboard 右侧「生成记录管理」
 
 ## 10. 愿景 vs 当前实现 差异矩阵（新增）
 
-| 领域 | PRD v1.0 愿景 | v2.2 当前实现 | 差异 / 延后 |
+| 领域 | PRD v1.0 愿景 | v2.2-v2.7 当前实现 | 差异 / 延后 |
 |---|---|---|---|
 | 输入 | URL 抓取 + 文本 | Google Play + 双语档案 + 本地/云端双路径 | Apple Store 🧭 |
-| Angle | 至少 5 种 | 8+（`angles/*.json`，如 asmr/dev_leak/drama/fail_trap/national_pride/progression/rescue/whale_flex） | 已超出 |
+| Angle | 至少 5 种 | 8+（`angles/*.json`，如 asmr/dev_leak 等），驱动心理转化模型 | 已超出 |
 | 评分 | Hook/Clarity/Conversion | 同上 + `review` 规则审校 + `rag_evidence` | 已超出 |
 | 竞品 | 提示对标素材 | RAG 证据 + `recommend-strategy` | UI 层“差异化建议”叙事 🧭 |
 | 导出 | PDF / Excel / Word | MD / XLSX / PDF + @OUT 文件夹 | Word ⏸；加入 @OUT 目录管理 |
-| 多语种 | 一键翻译 | 真正 transcreation（`locales[]` + tones） | 已超出 |
+| 多语种 | 一键翻译 | 真正 transcreation，语言与地区因子深度解耦（允许自由组合） | 已超出 |
+| 细粒度配置 | 未提及 | 脚本与文案配置彻底分离，分别支持时长/分镜量/数量量化控制 | v2.7 新增能力 |
 | 工作流 | 单次生成 | 生成→复用→刷新→对比→导出（history_log 驱动） | 显著超出 v1.0 |
-| 合规 | 未覆盖 | 规则 + LLM suggestion（Phase 21） | v2.2 新增能力 |
+| 合规 | 未覆盖 | 默认开启风控拦截 + 二次修正闭环 + 被拒理由持续反哺知识库迭代 | v2.7 核心闭环 |
 | 成本 | 未覆盖 | `/api/usage/summary` + Quota UI | v2.2 新增能力 |
 | AI 配音 | v2.0 目标 | 未实现 | ⏸ |
 | AI 视觉草图 | v2.0 目标 | 未实现 | ⏸ |

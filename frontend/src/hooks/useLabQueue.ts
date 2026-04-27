@@ -1,15 +1,7 @@
-/**
- * Phase 23 / B3 — Presets & Queue.
- *
- * Pure client-side scheduler: jobs are captured as parameter snapshots and
- * consumed in serial order against the Lab's runner callback. No backend
- * job system; refreshing the page preserves the queue (for resume after
- * accidental navigation) but does not auto-start a new run.
- */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import axios from 'axios';
+import { API_BASE } from '../config/apiBase';
 
-// Phase 25 / D3 — provider + model override are accepted on every job kind.
-// Both are optional and when absent the server picks the default provider.
 type EngineOverrides = {
   engine_provider?: string;
   engine_model?: string;
@@ -81,195 +73,165 @@ export type PresetSlot = {
   payload: QueueJobPayload;
 };
 
-const QUEUE_KEY = 'sop_queue';
-const PRESETS_KEY = 'sop_presets';
-const MAX_PRESETS = 10;
+// Polling hook to synchronize frontend state with backend
+export function useLabQueue(filterKind?: 'script' | 'copy') {
+  const [queue, setQueue] = useState<QueueJob[]>([]);
+  const [presets, setPresets] = useState<PresetSlot[]>([]);
+  
+  const [avgJobMs] = useState<number>(45000);
 
-const safeRead = <T,>(key: string, fallback: T): T => {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-};
-
-const safeWrite = (key: string, value: unknown) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // ignore quota / private mode failures
-  }
-};
-
-const shortId = () => Math.random().toString(36).slice(2, 10);
-
-export type QueueRunner = (
-  payload: QueueJobPayload,
-) => Promise<{ scriptId?: string; [key: string]: unknown } | undefined>;
-
-export function useLabQueue(runner: QueueRunner) {
-  const [queue, setQueue] = useState<QueueJob[]>(() => safeRead<QueueJob[]>(QUEUE_KEY, []));
-  const [presets, setPresets] = useState<PresetSlot[]>(() =>
-    safeRead<PresetSlot[]>(PRESETS_KEY, []),
-  );
-  const [isRunning, setIsRunning] = useState(false);
-  const [currentId, setCurrentId] = useState<string | null>(null);
-  const cancelRef = useRef(false);
-
-  // Rolling average run time (ms) across completed jobs; seeds the ETA label.
-  const [avgJobMs, setAvgJobMs] = useState<number>(() => {
-    const raw = Number(localStorage.getItem('sop_queue_avg_ms') || '45000');
-    return Number.isFinite(raw) && raw > 0 ? raw : 45000;
-  });
-
-  useEffect(() => safeWrite(QUEUE_KEY, queue), [queue]);
-  useEffect(() => safeWrite(PRESETS_KEY, presets), [presets]);
-  useEffect(() => {
+  const fetchQueue = useCallback(async () => {
     try {
-      localStorage.setItem('sop_queue_avg_ms', String(Math.round(avgJobMs)));
-    } catch {
-      // ignore
+      const res = await axios.get(`${API_BASE}/api/queue/jobs`);
+      let jobs = res.data.map((j: any) => ({
+        ...j,
+        payload: JSON.parse(j.payload_json),
+        createdAt: j.created_at,
+        scriptId: j.script_id,
+        startedAt: j.started_at,
+        finishedAt: j.finished_at
+      }));
+
+      if (filterKind === 'script') {
+        jobs = jobs.filter((j: any) => j.payload?.kind === 'full_sop');
+      } else if (filterKind === 'copy') {
+        jobs = jobs.filter((j: any) => j.payload?.kind === 'quick_copy' || j.payload?.kind === 'refresh_copy');
+      }
+
+      setQueue(jobs);
+    } catch (e) {
+      console.error("Failed to fetch jobs", e);
     }
-  }, [avgJobMs]);
+  }, [filterKind]);
+
+  const fetchPresets = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/api/queue/presets`);
+      let ps = res.data.map((p: any) => ({
+        ...p,
+        payload: JSON.parse(p.payload_json),
+        createdAt: p.created_at
+      }));
+
+      if (filterKind === 'script') {
+        ps = ps.filter((p: any) => p.payload?.kind === 'full_sop');
+      } else if (filterKind === 'copy') {
+        ps = ps.filter((p: any) => p.payload?.kind === 'quick_copy' || p.payload?.kind === 'refresh_copy');
+      }
+
+      setPresets(ps);
+    } catch (e) {
+      console.error("Failed to fetch presets", e);
+    }
+  }, [filterKind]);
+
+  useEffect(() => {
+    fetchQueue();
+    fetchPresets();
+    const interval = setInterval(fetchQueue, 3000);
+    return () => clearInterval(interval);
+  }, [fetchQueue, fetchPresets]);
 
   const pendingCount = useMemo(
     () => queue.filter((j) => j.status === 'pending' || j.status === 'running').length,
     [queue],
   );
+  
+  const isRunning = useMemo(() => queue.some(j => j.status === 'running'), [queue]);
+  const currentId = useMemo(() => queue.find(j => j.status === 'running')?.id || null, [queue]);
   const runnerIndex = useMemo(() => {
     if (!currentId) return -1;
     return queue.findIndex((j) => j.id === currentId);
   }, [queue, currentId]);
+  
   const etaMs = useMemo(() => pendingCount * Math.max(4000, avgJobMs), [pendingCount, avgJobMs]);
 
-  const addJob = useCallback((payload: QueueJobPayload, label?: string) => {
-    const job: QueueJob = {
-      id: shortId(),
-      label: label || describePayload(payload),
-      createdAt: Date.now(),
-      status: 'pending',
-      payload,
-    };
-    setQueue((prev) => [...prev, job]);
-    return job.id;
-  }, []);
+  const addJob = useCallback(async (payload: QueueJobPayload, label?: string) => {
+    try {
+      await axios.post(`${API_BASE}/api/queue/jobs`, {
+        label: label || describePayload(payload),
+        payload
+      });
+      fetchQueue();
+      return "backend_job"; // We don't necessarily need the ID synchronously for the UI
+    } catch (e) {
+      console.error("Failed to add job", e);
+      return null;
+    }
+  }, [fetchQueue]);
 
-  const removeJob = useCallback((id: string) => {
-    setQueue((prev) => prev.filter((j) => j.id !== id));
-  }, []);
+  const removeJob = useCallback(async (id: string) => {
+    try {
+      await axios.delete(`${API_BASE}/api/queue/jobs/${id}`);
+      fetchQueue();
+    } catch (e) {
+      console.error("Failed to delete job", e);
+    }
+  }, [fetchQueue]);
 
-  const clearQueue = useCallback((onlyFinished = false) => {
-    setQueue((prev) =>
-      onlyFinished
-        ? prev.filter((j) => j.status === 'pending' || j.status === 'running')
-        : [],
-    );
-  }, []);
+  const clearQueue = useCallback(async (onlyFinished = false) => {
+    try {
+      await axios.post(`${API_BASE}/api/queue/jobs/clear?only_finished=${onlyFinished ? 'true' : 'false'}`);
+      fetchQueue();
+    } catch (e) {
+      console.error("Failed to clear queue", e);
+    }
+  }, [fetchQueue]);
 
   const cancelRun = useCallback(() => {
-    cancelRef.current = true;
-  }, []);
+    // Cannot easily cancel a backend thread, but we can clear pending tasks
+    clearQueue(false);
+  }, [clearQueue]);
 
   const runAll = useCallback(async () => {
-    if (isRunning) return;
-    setIsRunning(true);
-    cancelRef.current = false;
-    try {
-      // Take a snapshot of pending jobs; we walk the snapshot to avoid races.
-      const snapshotIds = queue.filter((j) => j.status === 'pending').map((j) => j.id);
-      for (const id of snapshotIds) {
-        if (cancelRef.current) {
-          break;
-        }
-        setCurrentId(id);
-        const startedAt = Date.now();
-        setQueue((prev) =>
-          prev.map((j) => (j.id === id ? { ...j, status: 'running', startedAt } : j)),
-        );
-        const jobFromQueue = await new Promise<QueueJob | undefined>((resolve) => {
-          setQueue((prev) => {
-            const found = prev.find((j) => j.id === id);
-            resolve(found);
-            return prev;
-          });
-        });
-        if (!jobFromQueue) continue;
-        try {
-          const result = await runner(jobFromQueue.payload);
-          const finishedAt = Date.now();
-          const dur = Math.max(1000, finishedAt - startedAt);
-          setAvgJobMs((prev) => (prev <= 0 ? dur : Math.round(prev * 0.7 + dur * 0.3)));
-          setQueue((prev) =>
-            prev.map((j) =>
-              j.id === id
-                ? {
-                    ...j,
-                    status: 'ok',
-                    finishedAt,
-                    scriptId:
-                      (result && typeof (result as any).script_id === 'string'
-                        ? (result as any).script_id
-                        : (result as any)?.scriptId) || undefined,
-                  }
-                : j,
-            ),
-          );
-        } catch (err: any) {
-          const finishedAt = Date.now();
-          setQueue((prev) =>
-            prev.map((j) =>
-              j.id === id
-                ? {
-                    ...j,
-                    status: 'failed',
-                    finishedAt,
-                    error: err?.message || String(err),
-                  }
-                : j,
-            ),
-          );
-        }
-      }
-    } finally {
-      setCurrentId(null);
-      setIsRunning(false);
-      cancelRef.current = false;
-    }
-  }, [isRunning, queue, runner]);
+    // Backend queue worker automatically runs pending jobs!
+    // This is just to trigger an immediate fetch so UI updates.
+    fetchQueue();
+  }, [fetchQueue]);
 
   // Presets -----------------------------------------------------------------
-  const savePreset = useCallback((name: string, payload: QueueJobPayload) => {
-    setPresets((prev) => {
-      const clean = (name || '').trim() || `Preset ${prev.length + 1}`;
-      const slot: PresetSlot = {
-        id: shortId(),
+  const savePreset = useCallback(async (name: string, payload: QueueJobPayload) => {
+    try {
+      const clean = (name || '').trim() || `Preset ${presets.length + 1}`;
+      await axios.post(`${API_BASE}/api/queue/presets`, {
         name: clean,
-        createdAt: Date.now(),
-        payload,
-      };
-      const next = [slot, ...prev];
-      if (next.length > MAX_PRESETS) next.length = MAX_PRESETS;
-      return next;
-    });
-  }, []);
+        payload
+      });
+      fetchPresets();
+    } catch (e) {
+      console.error("Failed to save preset", e);
+    }
+  }, [presets, fetchPresets]);
 
-  const deletePreset = useCallback((id: string) => {
-    setPresets((prev) => prev.filter((p) => p.id !== id));
-  }, []);
+  const deletePreset = useCallback(async (id: string) => {
+    try {
+      await axios.delete(`${API_BASE}/api/queue/presets/${id}`);
+      fetchPresets();
+    } catch (e) {
+      console.error("Failed to delete preset", e);
+    }
+  }, [fetchPresets]);
 
-  const renamePreset = useCallback((id: string, name: string) => {
-    setPresets((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)));
-  }, []);
+  const renamePreset = useCallback(async (id: string, name: string) => {
+    try {
+      await axios.put(`${API_BASE}/api/queue/presets/${id}`, { name });
+      fetchPresets();
+    } catch (e) {
+      console.error("Failed to rename preset", e);
+    }
+  }, [fetchPresets]);
 
-  const togglePinPreset = useCallback((id: string) => {
-    setPresets((prev) => {
-      const next = prev.map((p) => (p.id === id ? { ...p, pinned: !p.pinned } : p));
-      next.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
-      return next;
-    });
-  }, []);
+  const togglePinPreset = useCallback(async (id: string) => {
+    try {
+      const preset = presets.find(p => p.id === id);
+      if (preset) {
+        await axios.put(`${API_BASE}/api/queue/presets/${id}`, { pinned: !preset.pinned });
+        fetchPresets();
+      }
+    } catch (e) {
+      console.error("Failed to toggle pin", e);
+    }
+  }, [presets, fetchPresets]);
 
   return {
     queue,

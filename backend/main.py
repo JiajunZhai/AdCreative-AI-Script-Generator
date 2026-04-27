@@ -30,33 +30,94 @@ from providers import (
 )
 
 
+def _load_fallback_providers() -> list[str]:
+    """Load the ordered fallback provider list from data/app_settings.json."""
+    import json
+    settings_file = os.path.join(os.path.dirname(__file__), "data", "app_settings.json")
+    try:
+        if os.path.exists(settings_file):
+            with open(settings_file, "r", encoding="utf-8") as f:
+                return json.load(f).get("fallback_providers", [])
+    except Exception:
+        pass
+    return []
+
+
 def resolve_llm_client(
     provider: str | None = None,
     model: str | None = None,
     *,
     default_env_model: str | None = None,
-) -> tuple[Any, str, str]:
-    """Return ``(client, provider_id, model)``.
+) -> tuple[Any, str, str, bool, str]:
+    """Return ``(client, provider_id, model, did_failover, failover_to)``.
 
     - If ``provider`` + an API key are present in env → new provider client.
     - Else if the legacy ``cloud_client`` (DeepSeek) is configured → it, with
       provider_id=``deepseek``.
-    - Else ``(None, provider or 'deepseek', resolved_model)`` so callers can
+    - Else ``(None, provider or 'deepseek', resolved_model, False, '')`` so callers can
       surface a graceful "skipped" status.
     """
     if provider:
         pid = str(provider).strip().lower()
         picked = _get_provider_client(pid)
         if picked is not None:
-            return picked, pid, _resolve_provider_model(pid, model)
+            return picked, pid, _resolve_provider_model(pid, model), False, ""
     if cloud_client is not None:
         mdl = (
             (model or "").strip()
             or os.getenv(default_env_model or "DEEPSEEK_MODEL", "deepseek-chat")
         )
-        return cloud_client, "deepseek", mdl
+        return cloud_client, "deepseek", mdl, False, ""
     fallback_provider = (provider or _default_provider_id()).strip().lower() or "deepseek"
-    return None, fallback_provider, _resolve_provider_model(fallback_provider, model)
+    return None, fallback_provider, _resolve_provider_model(fallback_provider, model), False, ""
+
+
+def call_llm_with_failover(
+    primary_client: Any,
+    primary_provider: str,
+    primary_model: str,
+    **kwargs: Any,
+) -> tuple[Any, str, str, bool, str]:
+    """Attempt LLM call; on 429/503, auto-retry with fallback providers.
+
+    Returns ``(response, provider_id, model_id, did_failover, failover_to)``.
+    """
+    from openai import RateLimitError
+    import httpx
+
+    def _is_retriable(exc: Exception) -> bool:
+        if isinstance(exc, RateLimitError):
+            return True
+        s = str(exc)
+        return "503" in s or "429" in s or "overloaded" in s.lower() or "too many" in s.lower()
+
+    # Try primary
+    try:
+        resp = primary_client.chat.completions.create(**kwargs)
+        return resp, primary_provider, primary_model, False, ""
+    except Exception as exc:
+        if not _is_retriable(exc) or primary_client is None:
+            raise
+
+    # Try fallback providers in order
+    fallback_list = _load_fallback_providers()
+    for fb_id in fallback_list:
+        if fb_id == primary_provider:
+            continue
+        fb_client = _get_provider_client(fb_id)
+        if fb_client is None:
+            continue
+        fb_model = _resolve_provider_model(fb_id, None)
+        try:
+            fb_kwargs = dict(kwargs)
+            fb_kwargs["model"] = fb_model
+            resp = fb_client.chat.completions.create(**fb_kwargs)
+            return resp, fb_id, fb_model, True, fb_id
+        except Exception:
+            continue
+
+    # All failed — re-raise from primary
+    raise RuntimeError(f"All providers exhausted for request (primary={primary_provider})")
 
 app = FastAPI(
     title="AdCreative AI Script Generator API",
@@ -75,6 +136,23 @@ app.add_middleware(
 
 from projects_api import router as projects_router
 app.include_router(projects_router)
+
+from queue_api import router as queue_router, background_queue_worker
+app.include_router(queue_router)
+
+_background_tasks = set()
+
+@app.on_event("startup")
+async def startup_event():
+    import asyncio
+    task = asyncio.create_task(background_queue_worker())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+class GenerateRefineRequest(BaseModel):
+    script_id: str
+    instruction: str
+    current_script: list[dict]
 
 class GenerateScriptRequest(BaseModel):
     project_id: str
@@ -99,6 +177,22 @@ class GenerateScriptRequest(BaseModel):
     compliance_suggest: bool = Field(
         default=False,
         description="When true and cloud engine is available, generate rewrite suggestions for compliance hits.",
+    )
+    intel_constraint: Optional[str] = Field(
+        default=None,
+        description="Optional forced creative constraint overridden from Oracle intel pipeline or user prompt.",
+    )
+    video_duration: Optional[str] = Field(
+        default="15s-30s",
+        description="Desired video duration (e.g. 15s, 30s, 60s)",
+    )
+    scene_count: Optional[str] = Field(
+        default="auto",
+        description="Desired number of scenes (e.g. 3-5, 5-8, auto)",
+    )
+    selected_draft_payload: Optional[dict] = Field(
+        default=None,
+        description="User-selected draft payload to bypass the draft generation phase.",
     )
 
 class AdCopyMatrix(BaseModel):
@@ -157,7 +251,7 @@ from sanitize import sanitize_game_info, sanitize_list, sanitize_user_text
 from db import run_migrations as _run_migrations
 from factors_store import read_insight as read_insight_factor, seed_from_filesystem as _seed_factors
 from compliance_store import seed_from_filesystem as _seed_compliance
-from projects_api import migrate_legacy_workspaces as _migrate_legacy_workspaces
+
 
 
 def _bootstrap_storage() -> None:
@@ -171,10 +265,7 @@ def _bootstrap_storage() -> None:
         _seed_compliance()
     except Exception as exc:
         print(f"[E] compliance seed failed: {exc}")
-    try:
-        _migrate_legacy_workspaces()
-    except Exception as exc:
-        print(f"[E] workspace migration failed: {exc}")
+
     # Knowledge corpus is seeded inside refinery when the module-level store is
     # built; rerun against a potentially-reset DB so tests / CLI scripts that
     # swap DB_PATH see the seed corpus too.
@@ -208,10 +299,14 @@ class QuickCopyRequest(BaseModel):
     engine_provider: Optional[str] = Field(default=None)
     engine_model: Optional[str] = Field(default=None)
     output_mode: str = Field(default="cn", description="Markdown output mode: cn or en")
-    quantity: int = Field(default=20, description="Number of headlines per locale")
+    quantity: int = Field(default=20, description="Legacy field, use specific counts instead")
+    primary_text_count: int = Field(default=5, description="Number of primary texts")
+    headline_count: int = Field(default=10, description="Number of headlines")
+    hashtag_count: int = Field(default=20, description="Number of hashtags")
     tones: list[str] = Field(default_factory=list, description="Tone preferences: humor, pro, clickbait, benefit, FOMO, etc.")
     locales: list[str] = Field(default_factory=list, description="Locales to generate copies for (e.g., en, ja, ar)")
     compliance_suggest: bool = Field(default=False, description="Generate compliance rewrite suggestions (cloud only).")
+    intel_constraint: Optional[str] = Field(default=None, description="Optional forced creative constraint overridden from Oracle intel pipeline.")
 
 class RefreshCopyRequest(BaseModel):
     project_id: str
@@ -227,6 +322,7 @@ class RefreshCopyRequest(BaseModel):
     tones: list[str] = Field(default_factory=list)
     locales: list[str] = Field(default_factory=list)
     compliance_suggest: bool = Field(default=False, description="Generate compliance rewrite suggestions (cloud only).")
+    intel_constraint: Optional[str] = Field(default=None, description="Optional forced creative constraint overridden from Oracle intel pipeline.")
 
 class QuickCopyResponse(BaseModel):
     script_id: str
@@ -420,6 +516,16 @@ class HistoryDecisionRequest(BaseModel):
     script_id: str
     decision: str = Field(default="pending", description="pending | winner | loser | neutral")
 
+class MarkWinnerRequest(BaseModel):
+    performance_stats: dict[str, Any] | None = None
+
+@app.post("/api/history/{script_id}/mark-winner")
+def set_history_winner(script_id: str, payload: MarkWinnerRequest):
+    """Mark a script as a winner with optional performance stats."""
+    from projects_api import mark_history_winner
+    if not mark_history_winner(script_id, payload.performance_stats):
+        raise HTTPException(status_code=404, detail="history entry not found")
+    return {"success": True, "script_id": script_id, "is_winner": True}
 
 def _compute_factor_version(*factor_jsons: Any) -> str:
     """Stable short fingerprint over the factor JSON payloads used in a generation.
@@ -926,7 +1032,7 @@ def quick_copy(request: QuickCopyRequest):
 
     # workspace (Phase 26/E: read from DB; fallback to legacy JSON if present)
     from projects_api import load_project as _load_project
-    project_json = _load_project(request.project_id) or {"name": "Unknown", "game_info": {"core_usp": "Generic Game"}}
+    project_json = _load_project(request.project_id) or {"name": "Unknown", "game_info": {"core_loop": "Generic Game"}}
     workspace_file = os.path.join(os.path.dirname(__file__), 'data', 'workspaces', f"{request.project_id}.json")
     if project_json.get("name") == "Unknown" and os.path.exists(workspace_file):
         with open(workspace_file, 'r', encoding='utf-8') as f:
@@ -939,12 +1045,16 @@ def quick_copy(request: QuickCopyRequest):
     safe_name = sanitize_user_text(project_json.get('name'), max_len=200, allow_newlines=False)
     safe_tones = sanitize_list(request.tones, max_len=80, max_items=20)
     safe_locales = sanitize_list(request.locales, max_len=40, max_items=24)
+    usp_dict = gi.get('usp', {})
+    usp_str = "\\n".join([f"- {k}: {v}" for k, v in usp_dict.items()]) if isinstance(usp_dict, dict) else str(usp_dict)
+    comp_set = ", ".join(gi.get('competitive_set', []))
     game_context = (
-        f"Title: {safe_name}\n"
-        f"Core Gameplay: {gi.get('core_gameplay', '')}\n"
-        f"USP: {gi.get('core_usp', '')}\n"
-        f"Target Persona: {gi.get('target_persona', '')}\n"
-        f"Extended Hooks: {gi.get('value_hooks', '')}"
+        f"Title: {safe_name}\\n"
+        f"Core Loop: {gi.get('core_loop', '')}\\n"
+        f"USP:\\n{usp_str}\\n"
+        f"Persona: {gi.get('persona', '')}\\n"
+        f"Visual DNA: {gi.get('visual_dna', '')}\\n"
+        f"Competitive Set: {comp_set}"
     )
 
     script_id = "COPY-" + uuid.uuid4().hex[:6].upper()
@@ -958,26 +1068,33 @@ def quick_copy(request: QuickCopyRequest):
     region_errors: dict[str, str] = {}
     region_factor_objs.extend([platform_json, angle_json])
     # Phase 25/D2 — resolve provider/model once for this whole request.
-    active_client, provider_id, model_id = resolve_llm_client(
+    active_client, provider_id, model_id, *_ = resolve_llm_client(
         request.engine_provider, request.engine_model
     )
-    for rid in regions_to_run:
+    import concurrent.futures
+
+    def _process_region(rid: str) -> dict:
         region_json = read_insight(rid)
-        region_factor_objs.append(region_json)
         # Optional: lightweight RAG context only (no heavy stitching)
         rag_context, rag_cits_r, rag_ev_r = retrieve_context_with_evidence(
             f"{rid} {request.platform_id} {request.angle_id}",
             top_k=4,
             supplement=f"{rid}\n{request.platform_id}\n{request.angle_id}\n{game_context}",
             region_boost_tokens=[str(region_json.get("name"))] if isinstance(region_json, dict) and region_json.get("name") else None,
+            region_id=rid,
+            target_platform=request.platform_id,
         )
-        region_rag_ids.extend(_extract_rag_rule_ids(rag_ev_r, rag_cits_r))
+        rag_ids = _extract_rag_rule_ids(rag_ev_r, rag_cits_r)
+        
         prompt = render_copy_prompt(
             game_context=game_context,
             culture_context=region_json if isinstance(region_json, dict) else {},
             platform_rules=platform_json if isinstance(platform_json, dict) else {},
             creative_logic=angle_json if isinstance(angle_json, dict) else {},
             quantity=request.quantity,
+            primary_text_count=getattr(request, 'primary_text_count', 5),
+            headline_count=getattr(request, 'headline_count', 10),
+            hashtag_count=getattr(request, 'hashtag_count', 20),
             tones=safe_tones,
             locales=safe_locales,
             avoid_terms=avoid_terms,
@@ -986,6 +1103,7 @@ def quick_copy(request: QuickCopyRequest):
 
         result_obj: dict[str, Any] = {}
         status = "skipped"
+        err_str = ""
         if active_client:
             try:
                 resp = active_client.chat.completions.create(
@@ -1003,15 +1121,33 @@ def quick_copy(request: QuickCopyRequest):
                 print(f"Quick copy failed ({rid}): {e}")
                 result_obj = {}
                 status = "failed"
-                region_errors[rid] = str(e)[:300]
+                err_str = str(e)[:300]
+                
         acm_raw = result_obj.get("ad_copy_matrix") if isinstance(result_obj, dict) else None
         normalized = _normalize_ad_copy_matrix(acm_raw, quantity=request.quantity)
-        # If the cloud call itself succeeded but the payload produced no usable
-        # variants, treat it as a fallback (still counts as partial failure).
         if status == "ok" and not normalized.get("variants"):
             status = "fallback"
-        region_statuses[rid] = status
-        region_acm[rid] = normalized
+            
+        return {
+            "rid": rid,
+            "region_json": region_json,
+            "rag_ids": rag_ids,
+            "status": status,
+            "err_str": err_str,
+            "normalized": normalized
+        }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(regions_to_run))) as executor:
+        futures = {executor.submit(_process_region, rid): rid for rid in regions_to_run}
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            rid = res["rid"]
+            region_factor_objs.append(res["region_json"])
+            region_rag_ids.extend(res["rag_ids"])
+            region_statuses[rid] = res["status"]
+            if res["err_str"]:
+                region_errors[rid] = res["err_str"]
+            region_acm[rid] = res["normalized"]
 
     # Merge multi-region into one stable {locales, variants} shape by namespacing locale keys: "{region}:{locale}"
     combined_locales: list[str] = []
@@ -1101,6 +1237,7 @@ def quick_copy(request: QuickCopyRequest):
             "region_short": "",
             "platform_short": str(platform_json.get("short_name") or "") if isinstance(platform_json, dict) else "",
             "angle_short": str(angle_json.get("short_name") or "") if isinstance(angle_json, dict) else "",
+            "visual_keywords": ", ".join(platform_json.get("visual_keywords", [])) if isinstance(platform_json, dict) and platform_json.get("visual_keywords") else "",
         },
         "cloud",
         payload,
@@ -1177,12 +1314,16 @@ def refresh_copy(request: RefreshCopyRequest):
     safe_name = sanitize_user_text(project_json.get('name'), max_len=200, allow_newlines=False)
     safe_tones = sanitize_list(request.tones, max_len=80, max_items=20)
     safe_locales = sanitize_list(request.locales, max_len=40, max_items=24)
+    usp_dict = gi.get('usp', {})
+    usp_str = "\\n".join([f"- {k}: {v}" for k, v in usp_dict.items()]) if isinstance(usp_dict, dict) else str(usp_dict)
+    comp_set = ", ".join(gi.get('competitive_set', []))
     game_context = (
-        f"Title: {safe_name}\n"
-        f"Core Gameplay: {gi.get('core_gameplay', '')}\n"
-        f"USP: {gi.get('core_usp', '')}\n"
-        f"Target Persona: {gi.get('target_persona', '')}\n"
-        f"Extended Hooks: {gi.get('value_hooks', '')}"
+        f"Title: {safe_name}\\n"
+        f"Core Loop: {gi.get('core_loop', '')}\\n"
+        f"USP:\\n{usp_str}\\n"
+        f"Persona: {gi.get('persona', '')}\\n"
+        f"Visual DNA: {gi.get('visual_dna', '')}\\n"
+        f"Competitive Set: {comp_set}"
     )
     base_script_context = sanitize_user_text(
         _script_to_context(found.get("script")), max_len=6000, allow_newlines=True
@@ -1194,6 +1335,8 @@ def refresh_copy(request: RefreshCopyRequest):
         top_k=4,
         supplement=f"{region_id}\n{platform_id}\n{angle_id}\n{game_context}",
         region_boost_tokens=[str(region_json.get("name"))] if isinstance(region_json, dict) and region_json.get("name") else None,
+        region_id=region_id,
+        target_platform=platform_id,
     )
     refresh_rag_ids = _extract_rag_rule_ids(rag_ev_r, rag_cits_r)
 
@@ -1203,7 +1346,10 @@ def refresh_copy(request: RefreshCopyRequest):
         platform_rules=platform_json if isinstance(platform_json, dict) else {},
         creative_logic=angle_json if isinstance(angle_json, dict) else {},
         quantity=request.quantity,
-        tones=safe_tones,
+        primary_text_count=getattr(request, 'primary_text_count', 5),
+        headline_count=getattr(request, 'headline_count', 10),
+        hashtag_count=getattr(request, 'hashtag_count', 20),
+        tones=safe_tones if 'safe_tones' in locals() else [],
         locales=safe_locales,
         base_script_context=base_script_context,
         avoid_terms=avoid_terms,
@@ -1212,7 +1358,7 @@ def refresh_copy(request: RefreshCopyRequest):
 
     script_id = "COPY-" + uuid.uuid4().hex[:6].upper()
     # Phase 25/D2 — per-call routing for refresh.
-    active_client, provider_id, model_id = resolve_llm_client(
+    active_client, provider_id, model_id, *_ = resolve_llm_client(
         request.engine_provider, request.engine_model
     )
     result_obj: dict[str, Any] = {}
@@ -1280,6 +1426,7 @@ def refresh_copy(request: RefreshCopyRequest):
             "region_short": str(region_json.get("short_name") or "") if isinstance(region_json, dict) else "",
             "platform_short": str(platform_json.get("short_name") or "") if isinstance(platform_json, dict) else "",
             "angle_short": str(angle_json.get("short_name") or "") if isinstance(angle_json, dict) else "",
+            "visual_keywords": ", ".join(platform_json.get("visual_keywords", [])) if isinstance(platform_json, dict) and platform_json.get("visual_keywords") else "",
         },
         "cloud",
         payload,
@@ -1380,12 +1527,16 @@ def retry_region(request: RetryRegionRequest):
     gi = sanitize_game_info((project_json.get("game_info") or {}))
     safe_name = sanitize_user_text(project_json.get('name'), max_len=200, allow_newlines=False)
     safe_locales = sanitize_list(derived_locales, max_len=40, max_items=24)
+    usp_dict = gi.get('usp', {})
+    usp_str = "\\n".join([f"- {k}: {v}" for k, v in usp_dict.items()]) if isinstance(usp_dict, dict) else str(usp_dict)
+    comp_set = ", ".join(gi.get('competitive_set', []))
     game_context = (
-        f"Title: {safe_name}\n"
-        f"Core Gameplay: {gi.get('core_gameplay', '')}\n"
-        f"USP: {gi.get('core_usp', '')}\n"
-        f"Target Persona: {gi.get('target_persona', '')}\n"
-        f"Extended Hooks: {gi.get('value_hooks', '')}"
+        f"Title: {safe_name}\\n"
+        f"Core Loop: {gi.get('core_loop', '')}\\n"
+        f"USP:\\n{usp_str}\\n"
+        f"Persona: {gi.get('persona', '')}\\n"
+        f"Visual DNA: {gi.get('visual_dna', '')}\\n"
+        f"Competitive Set: {comp_set}"
     )
     avoid_terms = _collect_avoid_terms(project_json)
 
@@ -1394,6 +1545,8 @@ def retry_region(request: RetryRegionRequest):
         top_k=4,
         supplement=f"{request.region_id}\n{platform_id}\n{angle_id}\n{game_context}",
         region_boost_tokens=[str(region_json.get("name"))] if isinstance(region_json, dict) and region_json.get("name") else None,
+        region_id=request.region_id,
+        target_platform=platform_id,
     )
     prompt = render_copy_prompt(
         game_context=game_context,
@@ -1401,6 +1554,9 @@ def retry_region(request: RetryRegionRequest):
         platform_rules=platform_json if isinstance(platform_json, dict) else {},
         creative_logic=angle_json if isinstance(angle_json, dict) else {},
         quantity=quantity,
+        primary_text_count=getattr(request, 'primary_text_count', 5) if 'request' in locals() else 5,
+        headline_count=getattr(request, 'headline_count', 10) if 'request' in locals() else 10,
+        hashtag_count=getattr(request, 'hashtag_count', 20) if 'request' in locals() else 20,
         tones=[],
         locales=safe_locales,
         avoid_terms=avoid_terms,
@@ -1411,7 +1567,7 @@ def retry_region(request: RetryRegionRequest):
     result_obj: dict[str, Any] = {}
     err: str | None = None
     # Phase 25/D2 — per-call routing for retry-region.
-    active_client, provider_id, model_id = resolve_llm_client(
+    active_client, provider_id, model_id, *_ = resolve_llm_client(
         request.engine_provider, request.engine_model
     )
     if active_client:
@@ -1643,12 +1799,28 @@ class ExtractUrlRequest(BaseModel):
     )
     engine_provider: Optional[str] = None
     engine_model: Optional[str] = None
+    output_lang: str = Field(default="cn", description="Output language: 'cn' or 'en'")
+
+class ExtractTextRequest(BaseModel):
+    text: str
+    engine: str = "cloud"
+    engine_provider: Optional[str] = None
+    engine_model: Optional[str] = None
+    output_lang: str = Field(default="cn", description="Output language: 'cn' or 'en'")
+
+class TranslateDnaRequest(BaseModel):
+    game_info: dict
+    target_lang: str = "en"
+    engine_provider: Optional[str] = None
+    engine_model: Optional[str] = None
+    category: Optional[str] = None
 
 class ExtractUrlResponse(BaseModel):
     success: bool
     title: str = ""
     extracted_usp: str = ""
     error: str = ""
+
 
 @app.get("/api/usage/summary")
 def usage_summary():
@@ -1697,7 +1869,7 @@ def compliance_rules():
 
 
 @app.get("/api/compliance/stats")
-def compliance_stats():
+def compliance_stats(project_id: Optional[str] = None):
     """Phase 24/C3 — Aggregated compliance hits across *all* projects' history.
 
     The UI uses this to render a "most-hit terms" leaderboard plus a preview
@@ -1713,6 +1885,8 @@ def compliance_stats():
     risky_records = 0
 
     for proj in load_projects():
+        if project_id and proj.get("id") != project_id:
+            continue
         log = proj.get("history_log") if isinstance(proj, dict) else None
         if not isinstance(log, list):
             continue
@@ -1836,12 +2010,14 @@ def providers_list():
     ``last_test_ok`` …) so the frontend can drive an "edit my provider"
     settings page without exposing secrets.
     """
-    from providers import list_providers as _list_providers, default_provider_id
+    from providers import list_providers as _list_providers, default_provider_id, show_experimental_providers
 
     items = _list_providers()
     return {
         "default_provider_id": default_provider_id(),
+        "fallback_providers": _load_fallback_providers(),
         "providers": items,
+        "show_experimental": show_experimental_providers(),
     }
 
 
@@ -1851,12 +2027,9 @@ def providers_list():
 
 
 class ProviderSettingsUpdate(BaseModel):
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
     default_model: Optional[str] = None
     extra_models: Optional[List[str]] = None
     enabled: Optional[bool] = None
-    clear_api_key: bool = False
 
 
 def _require_known_provider(provider_id: str):
@@ -1893,12 +2066,9 @@ def provider_settings_update(provider_id: str, body: ProviderSettingsUpdate):
 
     upsert_settings(
         provider_id,
-        api_key=_sanitize(body.api_key, max_len=2000),
-        base_url=_sanitize(body.base_url, max_len=500),
         default_model=_sanitize(body.default_model, max_len=200),
         extra_models=cleaned_extra,
         enabled=body.enabled,
-        clear_api_key=bool(body.clear_api_key),
     )
     invalidate_client_cache(provider_id)
 
@@ -1917,6 +2087,30 @@ def provider_settings_delete(provider_id: str):
 
     delete_settings(provider_id)
     invalidate_client_cache(provider_id)
+    for entry in _list_providers():
+        if entry["id"] == provider_id:
+            return {"success": True, "provider": entry}
+    return {"success": True}
+
+
+class EnvKeyUpdateRequest(BaseModel):
+    api_key: str
+
+@app.put("/api/providers/{provider_id}/key")
+def update_provider_env_key(provider_id: str, body: EnvKeyUpdateRequest):
+    """Write the API key directly to the .env file and process environment."""
+    _require_known_provider(provider_id)
+    from providers import get_provider_spec, invalidate_client_cache, list_providers as _list_providers
+    from env_config import update_env_var
+    
+    spec = get_provider_spec(provider_id)
+    
+    # Write to .env and os.environ
+    update_env_var(spec.api_key_env, body.api_key.strip())
+    
+    # Invalidate cache so the new key is picked up
+    invalidate_client_cache(provider_id)
+    
     for entry in _list_providers():
         if entry["id"] == provider_id:
             return {"success": True, "provider": entry}
@@ -1953,8 +2147,10 @@ def set_default_provider(req: SetDefaultProviderRequest):
     else:
         data.pop("default_provider_id", None)
         
-    with open(settings_file, "w", encoding="utf-8") as f:
+    tmp_file = settings_file + ".tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(data, f)
+    os.replace(tmp_file, settings_file)
         
     from providers import list_providers as _list_providers, default_provider_id as _def_id
     return {
@@ -1965,15 +2161,36 @@ def set_default_provider(req: SetDefaultProviderRequest):
 
 
 
+class SetFallbackOrderRequest(BaseModel):
+    provider_ids: list[str]
+
+@app.put("/api/providers/set-fallback-order")
+def set_fallback_order(req: SetFallbackOrderRequest):
+    """Set the ordered failover provider list for intelligent retry (429/503)."""
+    import json as _json
+    for pid in req.provider_ids:
+        _require_known_provider(pid)
+    settings_file = os.path.join(os.path.dirname(__file__), "data", "app_settings.json")
+    os.makedirs(os.path.dirname(settings_file), exist_ok=True)
+    data = {}
+    if os.path.exists(settings_file):
+        try:
+            with open(settings_file, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+        except Exception:
+            pass
+    data["fallback_providers"] = req.provider_ids
+    tmp_file = settings_file + ".tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        _json.dump(data, f)
+    import os
+    os.replace(tmp_file, settings_file)
+    return {"success": True, "fallback_providers": req.provider_ids}
+
+
 @app.post("/api/providers/{provider_id}/test")
 def provider_test_connection(provider_id: str):
-    """Ping the provider to verify key + base URL work.
-
-    Strategy: try ``client.models.list()`` first (cheap, no tokens charged on
-    most providers); fall back to a 1-token ``chat.completions.create`` if the
-    models endpoint is disabled for this account. The outcome is persisted on
-    ``provider_settings`` so the UI badge survives refreshes.
-    """
+    """Ping the provider with a 'Hello' message to verify chat completions."""
     _require_known_provider(provider_id)
     from providers import get_client, resolve_model
     from providers_store import record_test_result
@@ -1983,47 +2200,21 @@ def provider_test_connection(provider_id: str):
         record_test_result(provider_id, ok=False, note="no api key configured")
         return {"success": False, "ok": False, "error": "no api key configured"}
 
-    # 1) models.list — cheapest path, also gives us a live model roster.
-    note = ""
-    try:
-        resp = client.models.list()
-        ids: list[str] = []
-        for m in getattr(resp, "data", []) or []:
-            mid = getattr(m, "id", None) or (m.get("id") if isinstance(m, dict) else None)
-            if mid:
-                ids.append(str(mid))
-        if ids:
-            record_test_result(
-                provider_id,
-                ok=True,
-                note=f"models.list ok ({len(ids)} models)",
-            )
-            return {
-                "success": True,
-                "ok": True,
-                "method": "models.list",
-                "models": ids[:200],
-            }
-        note = "models.list returned empty"
-    except Exception as exc:  # pragma: no cover - network-path
-        note = f"models.list: {type(exc).__name__}: {str(exc)[:200]}"
-
-    # 2) fallback: a trivial chat call with max_tokens=1
     try:
         model_id = resolve_model(provider_id, None)
-        client.chat.completions.create(
+        resp = client.chat.completions.create(
             model=model_id,
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=1,
-            temperature=0,
+            messages=[{"role": "user", "content": f"你好 {model_id}"}],
+            max_tokens=100,
+            temperature=0.7,
         )
-        record_test_result(provider_id, ok=True, note=f"chat ping ok via {model_id}")
-        return {"success": True, "ok": True, "method": "chat.ping", "model": model_id}
+        reply = resp.choices[0].message.content
+        record_test_result(provider_id, ok=True, note=f"chat ok via {model_id}")
+        return {"success": True, "ok": True, "method": "chat", "model": model_id, "reply": reply}
     except Exception as exc:  # pragma: no cover - network-path
         err = f"{type(exc).__name__}: {str(exc)[:200]}"
-        final_note = f"{note}; chat: {err}" if note else f"chat: {err}"
-        record_test_result(provider_id, ok=False, note=final_note)
-        return {"success": False, "ok": False, "error": final_note}
+        record_test_result(provider_id, ok=False, note=f"chat: {err}")
+        return {"success": False, "ok": False, "error": err}
 
 
 # Phase 27 · F7 — sanitize the raw /v1/models output so the Engine Selector
@@ -2137,6 +2328,120 @@ def provider_fetch_models(provider_id: str):
     }
 
 
+@app.post("/api/providers/{provider_id}/factor-test")
+def provider_factor_test(provider_id: str):
+    """Factor Compliance Test — sends a strict JSON-schema stress test to the LLM
+    and returns a compliance_score (0–100) measuring how faithfully the model
+    produces a structured strategy factor output.
+    """
+    import json as _json
+    _require_known_provider(provider_id)
+    from providers import get_client, resolve_model, is_json_mode_supported
+
+    client = get_client(provider_id)
+    if client is None:
+        return {"ok": False, "score": 0, "error": "No API key configured for this provider."}
+
+    model_id = resolve_model(provider_id, None)
+    supports_json = is_json_mode_supported(provider_id)
+
+    # The schema we test against — AngleFactorSchema is the most demanding
+    # because it has the most unique dimension-specific fields.
+    test_schema = {
+        "name": "string — full display name",
+        "short_name": "string — abbreviated name (≤6 chars)",
+        "description": "string — strategy overview (≥50 chars)",
+        "focus": ["string — imperative directive #1", "string — imperative directive #2", "string — imperative directive #3"],
+        "rules": ["string — production spec rule #1", "string — production spec rule #2"],
+        "constraints": ["string — absolute prohibition #1", "string — absolute prohibition #2"],
+        "core_emotion": "string — primary psychological trigger",
+        "visual_tempo": "string — pacing pattern (e.g. Slow → Fast → Cut)",
+        "logic_steps": [
+            "1. Step one of the conversion funnel",
+            "2. Step two of the conversion funnel",
+            "3. Step three",
+            "4. CTA step"
+        ],
+        "audio_strategy": "string — sound design directive (≥30 chars)"
+    }
+
+    system_prompt = f"""You are an Ad Creative Strategy AI. Your ONLY task is to output a single, valid JSON object.
+The JSON must conform EXACTLY to this schema (all fields are required, all arrays must have at least 2 items):
+
+{_json.dumps(test_schema, indent=2, ensure_ascii=False)}
+
+Topic: Generate a strategy factor for the "Rage Bait / Satisfying Compilation" video creative angle.
+Output ONLY the JSON object. No markdown, no preamble, no explanation."""
+
+    if not supports_json:
+        system_prompt += "\nIMPORTANT: Output raw JSON only, no code fences or backticks."
+
+    try:
+        kwargs: dict = {
+            "model": model_id,
+            "messages": [{"role": "user", "content": system_prompt}],
+            "max_tokens": 800,
+            "temperature": 0.3,
+        }
+        if supports_json:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        resp = client.chat.completions.create(**kwargs)
+        raw = resp.choices[0].message.content or ""
+
+        # Parse JSON — strip markdown fences if present
+        clean = raw.strip()
+        if clean.startswith("```"):
+            clean = clean.split("```")[1]
+            if clean.startswith("json"):
+                clean = clean[4:]
+        parsed = _json.loads(clean.strip())
+
+        # Score: award points per required field that is present + non-trivial
+        required_fields = [
+            ("name", lambda v: isinstance(v, str) and len(v) > 2),
+            ("short_name", lambda v: isinstance(v, str) and len(v) > 0),
+            ("description", lambda v: isinstance(v, str) and len(v) >= 30),
+            ("focus", lambda v: isinstance(v, list) and len(v) >= 2),
+            ("rules", lambda v: isinstance(v, list) and len(v) >= 2),
+            ("constraints", lambda v: isinstance(v, list) and len(v) >= 2),
+            ("core_emotion", lambda v: isinstance(v, str) and len(v) > 5),
+            ("visual_tempo", lambda v: isinstance(v, str) and len(v) > 5),
+            ("logic_steps", lambda v: isinstance(v, list) and len(v) >= 3),
+            ("audio_strategy", lambda v: isinstance(v, str) and len(v) > 10),
+        ]
+        passed = sum(1 for field, check in required_fields if check(parsed.get(field)))
+        score = round((passed / len(required_fields)) * 100)
+        detail_lines = [
+            f"{'✅' if check(parsed.get(f)) else '❌'} {f}"
+            for f, check in required_fields
+        ]
+
+        return {
+            "ok": score >= 70,
+            "score": score,
+            "model": model_id,
+            "passed_fields": passed,
+            "total_fields": len(required_fields),
+            "detail": "\n".join(detail_lines),
+            "raw_output": raw[:600],
+        }
+
+    except _json.JSONDecodeError as e:
+        return {"ok": False, "score": 0, "error": f"JSON parse failed: {str(e)[:120]}", "raw_output": raw[:400] if 'raw' in dir() else ""}
+    except Exception as exc:
+        return {"ok": False, "score": 0, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    finally:
+        # Persist score regardless of pass/fail (score=0 on exception is recorded)
+        try:
+            from providers_store import record_compliance_result
+            final_score = locals().get("score", 0)
+            if isinstance(final_score, int):
+                record_compliance_result(provider_id, score=final_score, model_id=model_id)
+        except Exception:
+            pass
+
+
 @app.post("/api/extract-url", response_model=ExtractUrlResponse)
 def extract_url(request: ExtractUrlRequest):
     # Phase 23/B1 — URL itself is treated as untrusted; the scraper fetches
@@ -2154,12 +2459,12 @@ def extract_url(request: ExtractUrlRequest):
     extract_tokens: int | None = None
     extract_used_llm = False
     # Phase 25/D2 — per-call routing for extract.
-    active_client, provider_id, model_id = resolve_llm_client(
+    active_client, provider_id, model_id, *_ = resolve_llm_client(
         request.engine_provider, request.engine_model
     )
 
     if active_client:
-        from scraper import EXTRACT_USP_VIA_LLM_SYSTEM_PROMPT, _serialize_director_archive, _validate_director_archive
+        from scraper import get_extract_usp_prompt, _serialize_director_archive, _validate_director_archive
         from sanitize import wrap_user_input
 
         safe_title = sanitize_user_text(data.get("title"), max_len=200, allow_newlines=False)
@@ -2181,7 +2486,7 @@ def extract_url(request: ExtractUrlRequest):
                 model=model_id,
                 response_format={"type": "json_object"},
                 messages=[
-                    {"role": "system", "content": EXTRACT_USP_VIA_LLM_SYSTEM_PROMPT},
+                    {"role": "system", "content": get_extract_usp_prompt(request.output_lang)},
                     {"role": "user", "content": user_prompt},
                 ],
                 timeout=float(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "60")),
@@ -2213,10 +2518,127 @@ def extract_url(request: ExtractUrlRequest):
         "extracted_usp": extracted_usp,
     }
 
+@app.post("/api/extract-text", response_model=ExtractUrlResponse)
+def extract_text(request: ExtractTextRequest):
+    safe_text = sanitize_user_text(request.text, max_len=15000, allow_newlines=True)
+    if not safe_text:
+        return {"success": False, "error": "Empty text provided."}
+        
+    active_client, provider_id, model_id, *_ = resolve_llm_client(
+        request.engine_provider, request.engine_model
+    )
+    if not active_client:
+        return {"success": False, "error": "Cloud engine not configured."}
+
+    system_prompt = """You are an elite Game Analysis AI and Senior UA Creative Director.
+Your task is to analyze the provided unstructured game report/breakdown and extract a structured 5-Pillar Project DNA.
+CRITICAL RULE: You MUST output profound, rich analysis IN CHINESE. Do NOT overly truncate the insights. Preserve the strategic depth, mechanics descriptions, and psychological triggers from the original text.
+
+Output MUST be a pure JSON object:
+{
+  "title": "Game Name (if found, else empty)",
+  "core_loop": "详细的核心玩法循环与玩家体验轨迹（中文详述）",
+  "usp": {
+    "Gameplay": "玩法设计上的核心爽点与差异化钩子（中文详述）",
+    "Visual": "美术风格、视觉表现力及带给玩家的感官刺激（中文详述）",
+    "Social": "社交互动、排行榜、养成反馈等长线钩子（中文详述）",
+    "Other": "情感共鸣、解压、ASMR等其他深层心理学触发器（中文详述）"
+  },
+  "persona": "精确的目标受众画像、年龄层及他们的核心心理诉求（中文详述）",
+  "visual_dna": "整体视觉基因与材质光影特征总结（中文）",
+  "competitive_set": ["竞品1", "竞品2"]
+}
+Only output the JSON object. Do not include markdown formatting or comments."""
+
+    user_prompt = f"--- Raw Report ---\n{safe_text}\n"
+
+    try:
+        response = active_client.chat.completions.create(
+            model=model_id,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            timeout=float(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "60")),
+        )
+        raw_content = response.choices[0].message.content
+        parsed = json.loads(raw_content)
+        
+        return {
+            "success": True,
+            "title": parsed.get("title", ""),
+            "extracted_usp": raw_content,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/translate-dna")
+def translate_dna(request: TranslateDnaRequest):
+    active_client, provider_id, model_id, *_ = resolve_llm_client(
+        request.engine_provider, request.engine_model
+    )
+    if not active_client:
+        return {"success": False, "error": "Cloud engine not configured."}
+
+    lang_name = "ENGLISH" if request.target_lang == "en" else "CHINESE (中文)"
+    
+    if request.category in ["regions", "platforms", "angles"]:
+        system_prompt = f"""You are a professional Strategy Factor localizer.
+Your task is to translate ALL string values in the provided JSON object into {lang_name}.
+CRITICAL RULES:
+1. DO NOT change ANY of the JSON keys. Keep them exactly as provided.
+2. DO NOT change the structure of the JSON.
+3. Translate only the string values (e.g. descriptions, rules, constraints, cultural notes).
+4. ABSOLUTELY DO NOT translate the values for the "name" and "short_name" keys. Keep their original values completely unchanged.
+5. Output MUST be a pure JSON object, starting with {{ and ending with }}. No markdown fences.
+"""
+    else:
+        system_prompt = f"""You are a professional game localization expert.
+Your task is to translate ALL string values in the provided JSON object into {lang_name}.
+CRITICAL RULES:
+1. DO NOT change ANY of the JSON keys. Keep them exactly as provided.
+2. DO NOT change the structure of the JSON.
+3. Translate only the string values (e.g. descriptions, hooks, persona details).
+4. For competitive_set arrays, translate the game names only if they have recognized localized names, otherwise keep them as is.
+5. ABSOLUTELY DO NOT translate the values for the "name" and "short_name" keys. Keep their original values completely unchanged.
+6. Output MUST be a pure JSON object, starting with {{ and ending with }}. No markdown fences.
+"""
+    try:
+        response = active_client.chat.completions.create(
+            model=model_id,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(request.game_info, ensure_ascii=False)},
+            ],
+            timeout=float(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "30")),
+        )
+        raw_content = response.choices[0].message.content
+        parsed = json.loads(raw_content)
+        
+        # Pydantic validation if category is known
+        if request.category == "regions":
+            parsed = RegionFactorSchema.model_validate(parsed).model_dump()
+        elif request.category == "platforms":
+            parsed = PlatformFactorSchema.model_validate(parsed).model_dump()
+        elif request.category == "angles":
+            parsed = AngleFactorSchema.model_validate(parsed).model_dump()
+            
+        # Re-inject missing structural keys that were stripped by model_dump()
+        for key in ["id", "category", "_metadata"]:
+            if key in request.game_info:
+                parsed[key] = request.game_info[key]
+                
+        return {"success": True, "translated_info": parsed}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 class IngestRequest(BaseModel):
     raw_text: str = ""
-    source_url: str
+    source_url: str = "Manual Entry"
     year_quarter: str = "Unknown Date"
+    mark_pending: bool = False
 
 class IngestResponse(BaseModel):
     success: bool
@@ -2225,7 +2647,12 @@ class IngestResponse(BaseModel):
 
 @app.post("/api/refinery/ingest", response_model=IngestResponse)
 def ingest_report(request: IngestRequest):
-    result = distill_and_store(request.raw_text, request.source_url, request.year_quarter)
+    result = distill_and_store(
+        request.raw_text, 
+        request.source_url, 
+        request.year_quarter,
+        mark_pending=request.mark_pending
+    )
     success = result.get("success", False)
     if success:
         record_oracle_ingest_success()
@@ -2239,6 +2666,88 @@ def ingest_report(request: IngestRequest):
 def get_refinery_stats():
     from refinery import get_collection_stats
     return get_collection_stats()
+
+@app.get("/api/refinery/intel")
+def search_refinery_intel(query: str = "", limit: int = 50, region: str = "", tag: str = "", status: str = "active"):
+    from refinery import search_intel
+    return search_intel(query=query, limit=limit, region=region, tag=tag, status=status)
+
+class UpdateIntelRequest(BaseModel):
+    content: str | None = None
+    region: str | None = None
+    category: str | None = None
+    time: str | None = None
+    status: str | None = None
+
+@app.put("/api/refinery/intel/{item_id}")
+def edit_refinery_intel(item_id: str, req: UpdateIntelRequest):
+    from refinery import update_intel
+    success = update_intel(item_id, req.model_dump(exclude_none=True))
+    if success:
+        return {"success": True}
+    return {"success": False, "error": "Item not found or update failed"}
+
+@app.get("/api/refinery/export")
+def export_intel_seed():
+    from db import get_conn
+    import json
+    rows = get_conn().execute("SELECT doc_text, source, region, year_quarter, category FROM knowledge_docs").fetchall()
+    docs = []
+    metas = []
+    for r in rows:
+        docs.append(str(r["doc_text"] or ""))
+        metas.append({
+            "source": r["source"] or "",
+            "region": r["region"] or "",
+            "year_quarter": r["year_quarter"] or "",
+            "category": r["category"] or ""
+        })
+    content = json.dumps({"docs": docs, "metas": metas}, ensure_ascii=False, indent=2)
+    from fastapi.responses import Response
+    return Response(content=content, media_type="application/json", headers={"Content-Disposition": "attachment; filename=oracle_seed.json"})
+
+@app.get("/api/refinery/template")
+def download_intel_template():
+    import json
+    template = {
+        "docs": [
+            "[Global] Style: Keep it under 15s. - Start with a fast hook. (Why: Low attention span)",
+            "[Japan] Style: Cute characters. - Use high-pitched voiceovers. (Why: Cultural preference)"
+        ],
+        "metas": [
+            {"source": "Manual Entry", "region": "Global", "year_quarter": "2026-Q1", "category": "General"},
+            {"source": "Market Report", "region": "Japan", "year_quarter": "2026-Q1", "category": "region_jp"}
+        ]
+    }
+    content = json.dumps(template, ensure_ascii=False, indent=2)
+    from fastapi.responses import Response
+    return Response(content=content, media_type="application/json", headers={"Content-Disposition": "attachment; filename=seed_template.json"})
+
+
+@app.delete("/api/refinery/intel")
+def clear_refinery_intel(status: Optional[str] = None):
+    from refinery import clear_intel
+    success = clear_intel(status=status)
+    return {"success": success}
+
+@app.delete("/api/refinery/intel/{item_id}")
+def delete_refinery_intel(item_id: str):
+    from db import get_conn
+    conn = get_conn()
+    conn.execute("DELETE FROM knowledge_docs WHERE id = ?", (item_id,))
+    conn.execute("DELETE FROM knowledge_fts WHERE doc_id = ?", (item_id,))
+    # Invalidate matrix lazily
+    from refinery import collection
+    collection._vector_matrix = None
+    collection._vector_doc_ids = []
+    return {"success": True}
+
+@app.post("/api/refinery/backfill-tags")
+def trigger_backfill_tags():
+    """Re-analyze all existing intel via LLM to enrich missing metadata tags."""
+    from refinery import backfill_intel_tags
+    result = backfill_intel_tags()
+    return result
 
 class RecommendStrategyRequest(BaseModel):
     title: str
@@ -2349,6 +2858,213 @@ def delete_insight(req: InsightDeleteRequest):
     return {"success": False, "error": "Not found"}
 
 
+class GenerateInsightRequest(BaseModel):
+    category: str
+    source_text: str
+
+class RegionFactorSchema(BaseModel):
+    name: str
+    short_name: str
+    description: str
+    language: str
+    focus: list[str] = []
+    rules: list[str] = []
+    constraints: list[str] = []
+    culture_notes: list[str] = []
+    creative_hooks: list[str] = []
+
+class PlatformFactorSchema(BaseModel):
+    name: str
+    short_name: str
+    description: str
+    focus: list[str] = []
+    rules: list[str] = []
+    constraints: list[str] = []
+    specs: dict = {}
+    native_behavior: str = ""
+    algorithm_signals: list[str] = []
+    visual_keywords: list[str] = []
+
+class AngleFactorSchema(BaseModel):
+    name: str
+    short_name: str
+    description: str
+    focus: list[str] = []
+    rules: list[str] = []
+    constraints: list[str] = []
+    core_emotion: str = ""
+    visual_tempo: str = ""
+    logic_steps: list[str] = []
+    audio_strategy: str = ""
+
+@app.post("/api/insights/manage/generate")
+def generate_insight(req: GenerateInsightRequest):
+    import json
+    import re
+    from providers import get_client, default_provider_id, resolve_model, is_json_mode_supported
+    
+    def _extract_json_from_text(text: str) -> dict:
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return json.loads(text)
+    
+    provider_id = default_provider_id()
+    client = get_client(provider_id)
+    if not client:
+        return {"success": False, "error": "No LLM provider configured."}
+
+    model_id = resolve_model(provider_id, None)
+    supports_json = is_json_mode_supported(provider_id)
+
+    if req.category == "regions":
+        target_schema = RegionFactorSchema.model_json_schema()
+        domain_prompt = """
+[DOMAIN FOCUS: REGIONS]
+- Force extraction of "Cultural Taboos" and "Local Unique Memes" into `culture_notes`.
+- Extract proven psychological triggers for this region into `creative_hooks`.
+- Auto-translate the `name` and `short_name` appropriately.
+"""
+        model_class = RegionFactorSchema
+    elif req.category == "platforms":
+        target_schema = PlatformFactorSchema.model_json_schema()
+        domain_prompt = """
+[DOMAIN FOCUS: PLATFORMS]
+- Force extraction of "UI Occluded Areas" (e.g., safe zones) and standard aspect ratios into `specs`.
+- Extract "Algorithm Distribution Features" (how the algorithm ranks videos) into `algorithm_signals`.
+- Extract key visual mood and pacing tags (e.g., #FastPaced, #FirstPerson, #HighSaturation) into `visual_keywords`.
+"""
+        model_class = PlatformFactorSchema
+    else:
+        target_schema = AngleFactorSchema.model_json_schema()
+        domain_prompt = """
+[DOMAIN FOCUS: ANGLES]
+- Force structuring the raw text into the 4-step framework: Hook -> Build-up -> Climax -> CTA in `logic_steps`.
+- Identify the primary psychological trigger and place it in `core_emotion`.
+"""
+        model_class = AngleFactorSchema
+
+    schema_props = target_schema.get("properties", target_schema)
+    json_skeleton = {}
+    for k, v in schema_props.items():
+        if v.get("type") == "array":
+            json_skeleton[k] = [f"<{v.get('items', {}).get('type', 'string')}>"]
+        elif v.get("type") == "string":
+            json_skeleton[k] = "<string>"
+        elif v.get("type") == "integer":
+            json_skeleton[k] = "<integer>"
+        elif v.get("type") == "object":
+            json_skeleton[k] = {"<key>": "<string>"}
+        else:
+            json_skeleton[k] = "<any>"
+
+    is_enhance_mode = "[INSTRUCTIONS TO ENHANCE/OPTIMIZE THE EXISTING FACTOR]:" in req.source_text
+
+    if is_enhance_mode:
+        system_prompt = f"""# Role: 全球顶尖小游戏买量素材专家 & 心理学转化大师
+
+## Context
+你是一个拥有100年经验的移动端买量专家，专门负责优化小游戏（Mini-Games）的投放因子树（Factor Tree）。你的任务是接收一个现有的 JSON 因子对象，并根据用户的“优化指令”进行深度加工。
+
+## Core Mission
+- **保持结构**：必须严格遵守输入的 JSON 模式（Schema），不得增删字段，不得修改原始 ID。
+- **内容升级**：将平庸的描述升级为具有“多巴胺刺激”、“心理学钩子”和“极高转化率”的专业内容。
+- **语言地道**：所有 English 内容（如 hooks, descriptive focus）必须是地道的北美母语者水平，严禁中式英语。
+
+## Capability Matrix
+1. **智能补全 (Auto-fill)**：若字段为空，根据 ID 和 Name 自动推导该因子在买量实战中最核心的知识点。
+2. **定向进化 (Directional Enhancement)**：根据用户指令精准调整内容的侧重点。
+3. **逻辑校验 (Logical Consistency)**：确保 focus, rules, 和 constraints 之间互不矛盾且环环相扣。
+
+## Operational Rules
+1. **ID 锁定**：绝对禁止修改 `id` 字段。
+2. **深度合并**：只输出优化后的完整 JSON 对象。
+3. **术语要求**：在内容中恰当使用买量黑话（如：Rage Bait, Scroll-stopper, ASMR, Seamless Loop, UGC-style, eCPM optimization）。
+4. **禁止废话**：输出必须仅包含 JSON 代码块，不要任何开场白或解释。
+5. **法律与合规红线 (Legal Red Line)**：在任何“更具攻击性”或“擦边”的优化指令下，绝对禁止生成涉及真实血腥暴力、明显侵权（如直接使用米老鼠、马里奥等知名IP）或触犯平台封号底线的策略。必须将这些列入 `constraints` 字段中作为严格禁区。
+
+## Optimization Logic (按字段)
+- **description**: 解释该因子的底层心理学逻辑或转化原理。
+- **focus**: 必须是可落地的执行重点，强调前 2 秒的视觉冲击。
+- **rules**: 具体的制作标准，包含安全区、画质、节奏要求。
+- **constraints**: 明确的禁区，防止平台封号或用户反感。
+- **visual_tempo / audio_strategy**: 提供具体的物理参数建议（如 Hz, BPM, Duration）。
+
+{domain_prompt}
+
+OUTPUT FORMAT:
+Return ONLY a valid JSON object matching the exact keys and data types shown below. Do NOT output schema definitions like {{"type": "string"}}, output the ACTUAL strings/arrays!
+{json.dumps(json_skeleton, indent=2)}
+"""
+    else:
+        system_prompt = f"""You are an expert Ad Creative Strategist.
+Your task is to analyze the user's unstructured notes and output a highly structured JSON Strategy Factor.
+You MUST extract the core directives into imperative, actionable rules.
+Use imperative tone (e.g., "Must show...", "Absolutely prohibit...").
+
+CRITICAL INSTRUCTION FOR MISSING FIELDS: 
+If the user's text does not explicitly mention certain aspects (e.g., audio_strategy, visual_tempo, constraints), DO NOT leave them blank, but DO NOT hallucinate randomly.
+You MUST deduce highly specific, industry-standard recommendations that STRICTLY ALIGN with the established `core_emotion` and `logic_steps`.
+To ensure data transparency, you MUST prefix any AI-deduced field values with "[AI 推演] " (or "[AI Inferred] " depending on language) so the human strategist knows it was automatically generated for their review.
+
+{domain_prompt}
+
+OUTPUT FORMAT:
+Return ONLY a valid JSON object matching the exact keys and data types shown below. Do NOT output schema definitions like {{"type": "string"}}, output the ACTUAL strings/arrays!
+{json.dumps(json_skeleton, indent=2)}
+"""
+    if not supports_json:
+        system_prompt += "\nYou MUST output valid JSON only. Do not include any preamble or markdown blocks."
+
+    try:
+        kwargs = {
+            "model": model_id,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": req.source_text}
+            ],
+            "temperature": 0.7
+        }
+        if supports_json:
+            kwargs["response_format"] = {"type": "json_object"}
+            
+        response = client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content
+        
+        if not supports_json:
+            parsed = _extract_json_from_text(content)
+        else:
+            parsed = json.loads(content)
+            
+        # Defensive unwrapping and case normalization for LLM hallucinations
+        if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
+            parsed = parsed[0]
+            
+        if isinstance(parsed, dict):
+            lowercase_parsed = {k.lower(): v for k, v in parsed.items()}
+            if "name" not in lowercase_parsed:
+                # Try to unwrap if nested inside "properties" or schema name
+                for v in lowercase_parsed.values():
+                    if isinstance(v, dict):
+                        lowercase_v = {k.lower(): val for k, val in v.items()}
+                        if "name" in lowercase_v:
+                            parsed = lowercase_v
+                            break
+                else:
+                    parsed = lowercase_parsed
+            else:
+                parsed = lowercase_parsed
+                
+        # Pydantic Strict Validation
+        validated = model_class.model_validate(parsed)
+        final_dict = validated.model_dump()
+        final_dict["category"] = req.category
+        return {"success": True, "data": final_dict}
+    except Exception as e:
+        print(f"Generate Insight Error: {e}")
+        return {"success": False, "error": f"Validation/Generation Error: {str(e)}"}
+
+
 @app.post("/api/generate", response_model=GenerateScriptResponse)
 def generate_script(request: GenerateScriptRequest):
     import os, json
@@ -2362,7 +3078,7 @@ def generate_script(request: GenerateScriptRequest):
 
     # 1. READ DATABASES
     from projects_api import load_project as _load_project
-    project_json = _load_project(request.project_id) or {"name": "Unknown", "game_info": {"core_usp": "Generic Game"}}
+    project_json = _load_project(request.project_id) or {"name": "Unknown", "game_info": {"core_loop": "Generic Game"}}
     workspace_file = os.path.join(os.path.dirname(__file__), 'data', 'workspaces', f"{request.project_id}.json")
     if project_json.get("name") == "Unknown" and os.path.exists(workspace_file):
         with open(workspace_file, 'r', encoding='utf-8') as f:
@@ -2383,17 +3099,21 @@ def generate_script(request: GenerateScriptRequest):
     # Phase 23/B1 — sanitize project-origin user text before it enters the prompt.
     gi = sanitize_game_info(project_json.get('game_info', {}))
     safe_name = sanitize_user_text(project_json.get('name'), max_len=200, allow_newlines=False)
+    usp_dict = gi.get('usp', {})
+    usp_str = "\\n".join([f"- {k}: {v}" for k, v in usp_dict.items()]) if isinstance(usp_dict, dict) else str(usp_dict)
+    comp_set = ", ".join(gi.get('competitive_set', []))
     game_context = (
-        f"Title: {safe_name}\n"
-        f"Core Gameplay: {gi.get('core_gameplay', '')}\n"
-        f"USP: {gi.get('core_usp', '')}\n"
-        f"Target Persona: {gi.get('target_persona', '')}\n"
-        f"Extended Hooks: {gi.get('value_hooks', '')}"
+        f"Title: {safe_name}\\n"
+        f"Core Loop: {gi.get('core_loop', '')}\\n"
+        f"USP:\\n{usp_str}\\n"
+        f"Persona: {gi.get('persona', '')}\\n"
+        f"Visual DNA: {gi.get('visual_dna', '')}\\n"
+        f"Competitive Set: {comp_set}"
     )
     from usage_tracker import record_generate_success
     script_id = "SOP-" + uuid.uuid4().hex[:6].upper()
     # Phase 25/D2 — resolve once for both draft and director stages.
-    active_client, provider_id, model_id = resolve_llm_client(
+    active_client, provider_id, model_id, *_ = resolve_llm_client(
         request.engine_provider, request.engine_model
     )
 
@@ -2404,42 +3124,66 @@ def generate_script(request: GenerateScriptRequest):
 
     def build_rag_supplement() -> tuple[str, list[str], list[dict]]:
         rag_parts: list[str] = [request.region_id, request.platform_id, request.angle_id, game_context]
-        if isinstance(region_json, dict):
-            n = region_json.get("name")
+        # --- Shared base: extract common fields (description, focus, rules, constraints) ---
+        def _extract_base(factor: dict, label: str) -> None:
+            n = factor.get("name")
             if n:
-                rag_parts.append(str(n))
-            for key in ("culture_notes", "creative_hooks", "focus"):
+                rag_parts.append(f"[{label}] {n}")
+            desc = factor.get("description")
+            if desc:
+                rag_parts.append(f"[{label} Strategy] {desc[:600]}")
+            for field, prefix in [("focus", "MUST DO"), ("rules", "SPEC RULES"), ("constraints", "ABSOLUTE TABOOS")]:
+                val = factor.get(field)
+                if isinstance(val, list) and val:
+                    items = "\n".join(f"- {str(x)}" for x in val[:8])
+                    rag_parts.append(f"[{label} — {prefix}]\n{items}")
+
+        # --- Region-specific: cultural context & language ---
+        if isinstance(region_json, dict):
+            _extract_base(region_json, "REGION")
+            lang = region_json.get("language")
+            if lang:
+                rag_parts.append(f"[REGION Language] Output language: {lang}")
+            for key in ("culture_notes", "creative_hooks"):
                 val = region_json.get(key)
-                if isinstance(val, list):
-                    rag_parts.append(" ".join(str(x) for x in val[:6]))
-                elif isinstance(val, str) and val:
-                    rag_parts.append(val[:800])
+                if isinstance(val, list) and val:
+                    items = "\n".join(f"- {str(x)}" for x in val[:6])
+                    rag_parts.append(f"[REGION — {key.upper()}]\n{items}")
+
+        # --- Platform-specific: technical specs & algorithm behavior ---
         if isinstance(platform_json, dict):
+            _extract_base(platform_json, "PLATFORM")
             specs = platform_json.get("specs")
             if isinstance(specs, dict):
-                fmt = specs.get("format")
-                if isinstance(fmt, list):
-                    rag_parts.append(" ".join(str(x) for x in fmt))
-                for sk in ("pacing", "safe_zone"):
-                    sv = specs.get(sk)
-                    if isinstance(sv, str) and sv:
-                        rag_parts.append(sv[:500])
-            elif isinstance(specs, list):
-                rag_parts.append(" ".join(str(x) for x in specs[:8]))
-            ph = platform_json.get("psychological_hooks")
-            if isinstance(ph, list):
-                rag_parts.append(" ".join(str(x) for x in ph[:6]))
-            for key in ("name", "native_behavior", "focus"):
-                v = platform_json.get(key)
-                if isinstance(v, str) and v:
-                    rag_parts.append(v[:600])
+                spec_lines = [f"  {k}: {v}" for k, v in specs.items()]
+                rag_parts.append(f"[PLATFORM — TECH SPECS]\n" + "\n".join(spec_lines))
+            nb = platform_json.get("native_behavior")
+            if nb:
+                rag_parts.append(f"[PLATFORM — USER BEHAVIOR] {nb[:600]}")
+            algo = platform_json.get("algorithm_signals")
+            if isinstance(algo, list) and algo:
+                items = "\n".join(f"- {str(x)}" for x in algo[:6])
+                rag_parts.append(f"[PLATFORM — ALGORITHM SIGNALS]\n{items}")
+
+        # --- Angle-specific: psychological conversion model ---
         if isinstance(angle_json, dict):
-            for key in ("name", "core_emotion", "logic_steps"):
-                v = angle_json.get(key)
-                if isinstance(v, list):
-                    rag_parts.append(" ".join(str(x) for x in v[:8]))
-                elif isinstance(v, str) and v:
-                    rag_parts.append(v[:600])
+            _extract_base(angle_json, "ANGLE")
+            ce = angle_json.get("core_emotion")
+            if ce:
+                rag_parts.append(f"[ANGLE — CORE EMOTION] {ce}")
+            ls = angle_json.get("logic_steps")
+            if isinstance(ls, list) and ls:
+                items = "\n".join(f"{str(x)}" for x in ls[:8])
+                rag_parts.append(f"[ANGLE — CONVERSION FUNNEL]\n{items}")
+            vt = angle_json.get("visual_tempo")
+            if vt:
+                rag_parts.append(f"[ANGLE — VISUAL TEMPO] {vt}")
+            aus = angle_json.get("audio_strategy")
+            if aus:
+                rag_parts.append(f"[ANGLE — AUDIO STRATEGY] {aus[:600]}")
+        if getattr(request, "intel_constraint", None):
+            rag_parts.append(f"!!! CRITICAL ACTIONABLE OVERRIDE !!!\n{request.intel_constraint}")
+
         rag_supplement = "\n".join(p for p in rag_parts if p)
         region_boost: list[str] = []
         if isinstance(region_json, dict) and region_json.get("name"):
@@ -2450,6 +3194,23 @@ def generate_script(request: GenerateScriptRequest):
             supplement=rag_supplement,
             region_boost_tokens=region_boost or None,
         )
+
+        # Phase 3: The Winner's Loop
+        from db import get_conn
+        import json
+        winner_row = get_conn().execute(
+            "SELECT payload_json FROM history_log WHERE region_id = ? AND platform_id = ? AND angle_id = ? AND is_winner = 1 ORDER BY created_at DESC LIMIT 1",
+            (request.region_id, request.platform_id, request.angle_id)
+        ).fetchone()
+        if winner_row:
+            try:
+                winner_data = json.loads(winner_row["payload_json"])
+                winner_script = json.dumps(winner_data.get("script", []), ensure_ascii=False)
+                winner_prompt = f"!!! 历史爆款锚点：请参考以下经市场验证过的胜利逻辑进行进化 !!!\n{winner_script[:1500]}\n"
+                ctx = winner_prompt + ctx
+            except Exception as e:
+                print(f"Failed to load winner script: {e}")
+
         return ctx, citations, evidence
 
     def finalize_response(
@@ -2510,6 +3271,7 @@ def generate_script(request: GenerateScriptRequest):
             "mode": mode,
             "elapsed_ms": int((time.perf_counter() - t0) * 1000),
             "rag_rules_used": len(evidence or []),
+            "failover_notice": getattr(request, "_failover_notice", None),
         }
         md_rel = export_markdown_after_generate(
             request.project_id,
@@ -2524,6 +3286,7 @@ def generate_script(request: GenerateScriptRequest):
                 "region_short": str(region_json.get("short_name") or "") if isinstance(region_json, dict) else "",
                 "platform_short": str(platform_json.get("short_name") or "") if isinstance(platform_json, dict) else "",
                 "angle_short": str(angle_json.get("short_name") or "") if isinstance(angle_json, dict) else "",
+                "visual_keywords": ", ".join(platform_json.get("visual_keywords", [])) if isinstance(platform_json, dict) and platform_json.get("visual_keywords") else "",
             },
             engine_label,
             resp,
@@ -2534,21 +3297,24 @@ def generate_script(request: GenerateScriptRequest):
 
     # shared context
     rag_context, rag_citations, rag_evidence = build_rag_supplement()
-    selected_draft: dict[str, Any] | None = None
+    selected_draft: dict[str, Any] | None = request.selected_draft_payload
     drafts: list[dict] = []
-    # Phase 22 — history schema v2 context
+    # Phase 22 - history schema v2 context
     factor_version = _compute_factor_version(region_json, platform_json, angle_json)
     rag_rule_ids = _extract_rag_rule_ids(rag_evidence, rag_citations)
     avoid_terms = _collect_avoid_terms(project_json)
-    draft_status: str | None = "skipped"
+    draft_status: str | None = "skipped" if selected_draft else "pending"
 
     # 2. DRAFT STAGE
-    if mode in {"draft", "auto"}:
+    if mode in {"draft", "auto"} and not selected_draft:
         draft_prompt = render_draft_prompt(
             game_context=game_context,
             culture_context=region_json,
             platform_rules=platform_json,
             creative_logic=angle_json,
+            video_duration=request.video_duration,
+            scene_count=request.scene_count,
+            user_prompt=request.intel_constraint,
         )
         draft_user = f"Market context:\n{rag_context}\n\nReturn draft concepts JSON only."
         draft_payload: dict[str, Any] = {}
@@ -2636,6 +3402,10 @@ def generate_script(request: GenerateScriptRequest):
         creative_logic=angle_json,
         selected_draft_json=json.dumps(selected_draft, ensure_ascii=False) if selected_draft else "",
         avoid_terms=avoid_terms,
+        video_duration=request.video_duration,
+        scene_count=request.scene_count,
+        user_prompt=request.intel_constraint,
+        output_mode=request.output_mode,
     )
     _print_console_safe("\n[ATOMIC DB SYNTHESIS SUCCESS - SUPER CONTEXT GENERATED]")
     _print_console_safe(director_prompt)
@@ -2701,3 +3471,57 @@ def generate_script(request: GenerateScriptRequest):
         model=model_id,
     )
     return finalized
+
+class ContextPreviewRequest(BaseModel):
+    region_id: str
+    platform_id: str
+    angle_id: str
+    game_info: Optional[dict] = None
+
+@app.post("/api/context-preview")
+def context_preview(req: ContextPreviewRequest):
+    oracle_flashes = []
+    try:
+        from factors_store import read_insight
+        region_data = read_insight(req.region_id)
+        platform_data = read_insight(req.platform_id)
+        
+        region_name = region_data.get("name") or req.region_id
+        platform_name = platform_data.get("name") or req.platform_id
+        
+        from refinery import search_intel
+        intel_res = search_intel(region=region_name, limit=2)
+        if not intel_res:
+             intel_res = search_intel(limit=2)
+             
+        oracle_flashes = [i.get('title', '') for i in intel_res if i.get('title')]
+    except Exception as e:
+        print(f"Error in context_preview oracle: {e}")
+        platform_name = req.platform_id
+        
+    dna_conflicts = []
+    if req.game_info:
+        core_loop = req.game_info.get("core_loop", "")
+        if core_loop:
+            dna_conflicts.append(f"核心玩法: {core_loop[:25]}")
+            
+        usp_data = req.game_info.get("usp")
+        if isinstance(usp_data, dict) and usp_data:
+            first_usp = list(usp_data.values())[0]
+            dna_conflicts.append(f"核心卖点: {first_usp[:25]}")
+        elif isinstance(usp_data, str) and usp_data:
+            dna_conflicts.append(f"核心卖点: {usp_data[:25]}")
+            
+        persona = req.game_info.get("persona", "")
+        if persona and len(dna_conflicts) < 2:
+            dna_conflicts.append(f"受众基因: {persona[:25]}")
+            
+    # Visual keywords based on platform/region
+    # First, try to get them dynamically from the platform's JSON data
+    visual_keywords = platform_data.get("visual_keywords", [])
+        
+    return {
+        "oracle_flashes": oracle_flashes[:2],
+        "dna_conflicts": dna_conflicts[:2],
+        "visual_keywords": visual_keywords[:3]
+    }

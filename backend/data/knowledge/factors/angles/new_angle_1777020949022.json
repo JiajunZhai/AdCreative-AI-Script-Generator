@@ -1,0 +1,30 @@
+{
+    "name": "怜悯救援模型",
+    "short_name": "怜悯救赎",
+    "description": "Based on the evolutionary psychology instinct to protect offspring/weak individuals. By placing cute or vulnerable characters in extremely harsh environments, it leverages users' guilt and the illusion of 'I am the savior' to drive conversion.",
+    "focus": [
+        "Crisis visualization: leaking roof, trembling character, gradually freezing screen edges. These visual elements must flicker constantly to create urgency.",
+        "‘Fatal’ wrong demonstration: The virtual hand must choose an item that seems useful but actually causes disaster (e.g., giving a fan to a cold person), triggering the user's outcry: 'No! Let me save her!'",
+        "Survival countdown: Decreasing health bar or thermometer displayed in a screen corner or above the character's head, using loss aversion psychology to force clicks."
+    ],
+    "rules": [
+        "Character eye anchor: The character must have large eyes and look directly at the camera, showing an expression of pleading or crying. This bypasses the rational brain and attacks the emotional brain directly.",
+        "Instant negative feedback for environmental interaction: Whenever an item is chosen incorrectly, the character's status must worsen in real time (e.g., turning into ice), reinforcing the user's urge to correct.",
+        "Forbid premature resolution: The material must be interrupted at the moment when the environment is about to improve (e.g., fire just lit but goes out), making the user download to 'complete' the result."
+    ],
+    "constraints": [
+        "Forbid showing excessively bloody or realistic abuse: The goal is to evoke pity, not disgust or reports from users.",
+        "Item logic cannot be too absurd: Although deliberately wrong choices are made, the function of items must be common sense (e.g., fire basin, blanket, wooden board); otherwise users will feel fooled and churn."
+    ],
+    "core_emotion": "Sympathy, anxiety, savior complex, guilt-driven after failure",
+    "visual_tempo": "Sustained tension. The background environment continuously deteriorates (water level rises/temperature drops), the virtual hand makes 2-3 failed attempts, rhythm from slow to urgent.",
+    "logic_steps": [
+        "Hook (0-3s): Despair display. A mother and daughter shivering in a drafty, broken house; snow outside; text prompt 'HELP!'",
+        "Build-up (3-9s): Consecutive wrong items. Adding water to the fire basin, using paper to patch the roof; environment worsens, crying intensifies.",
+        "Climax (9-12s): Last chance. Only one correct item flashes on screen, but the virtual hand moves toward another wrong one; freeze frame.",
+        "CTA (12s+): Responsibility transfer. Copy: 'Only you can save them.' or 'Can you let her survive tonight?'"
+    ],
+    "audio_strategy": "Background sound: harsh wind and snow, faint crying. On failure: a flatline 'beep' or piercing alarm sound to increase anxiety.",
+    "id": "new_angle_1777020949022",
+    "category": "angles"
+}

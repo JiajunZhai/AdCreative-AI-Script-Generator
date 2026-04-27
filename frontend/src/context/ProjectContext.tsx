@@ -4,10 +4,12 @@ import axios from 'axios';
 import { API_BASE } from '../config/apiBase';
 
 export interface GameInfo {
-  core_gameplay: string;
-  core_usp: string;
-  target_persona?: string;
-  value_hooks?: string;
+  // Advanced 5-Pillar Project DNA
+  core_loop?: string;
+  usp?: Record<string, string>;
+  persona?: string;
+  visual_dna?: string;
+  competitive_set?: string[];
 }
 
 export interface TargetAnalysis {
@@ -54,46 +56,54 @@ export const ProjectProvider: React.FC<{children: ReactNode}> = ({ children }) =
   const [error, setError] = useState<string | null>(null);
   const CACHE_KEY = 'adcreative_current_project_cache';
 
+  const isMounted = React.useRef(true);
+  React.useEffect(() => {
+    isMounted.current = true;
+    return () => { isMounted.current = false; };
+  }, []);
+
   const fetchProjects = async () => {
     try {
-      setError(null);
-      const res = await axios.get<Project[]>(`${API_BASE}/api/projects`);
-      setProjects(res.data);
+      if (isMounted.current) setError(null);
+      const res = await axios.get<Project[]>(`${API_BASE}/api/projects/`);
+      if (isMounted.current) setProjects(res.data);
       return res.data;
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch projects');
+      if (isMounted.current) setError(err.message || 'Failed to fetch projects');
       return [];
     }
   };
 
   const init = async () => {
-    setIsLoading(true);
+    if (isMounted.current) setIsLoading(true);
     // Bootstrap from local cache to avoid refresh flicker.
     try {
       const cached = localStorage.getItem(CACHE_KEY);
       if (cached && !currentProject) {
         const parsed = JSON.parse(cached) as Project;
         if (parsed && typeof parsed === 'object' && typeof (parsed as any).id === 'string') {
-          _setCurrentProject(parsed);
+          if (isMounted.current) _setCurrentProject(parsed);
         }
       }
     } catch {
       // ignore cache parse errors
     }
     const data = await fetchProjects();
-    if (data.length > 0) {
-      const storedId = localStorage.getItem('adcreative_current_project_id');
-      const found = data.find(p => p.id === storedId);
-      if (found) {
-        _setCurrentProject(found);
-        try { localStorage.setItem(CACHE_KEY, JSON.stringify(found)); } catch { /* ignore */ }
-      } else {
-        _setCurrentProject(data[0]);
-        localStorage.setItem('adcreative_current_project_id', data[0].id);
-        try { localStorage.setItem(CACHE_KEY, JSON.stringify(data[0])); } catch { /* ignore */ }
-      }
+    if (isMounted.current) {
+        if (data.length > 0) {
+          const storedId = localStorage.getItem('adcreative_current_project_id');
+          const found = data.find(p => p.id === storedId);
+          if (found) {
+            _setCurrentProject(found);
+            try { localStorage.setItem(CACHE_KEY, JSON.stringify(found)); } catch { /* ignore */ }
+          } else {
+            _setCurrentProject(data[0]);
+            localStorage.setItem('adcreative_current_project_id', data[0].id);
+            try { localStorage.setItem(CACHE_KEY, JSON.stringify(data[0])); } catch { /* ignore */ }
+          }
+        }
+        setIsLoading(false);
     }
-    setIsLoading(false);
   };
 
   useEffect(() => {
@@ -113,10 +123,12 @@ export const ProjectProvider: React.FC<{children: ReactNode}> = ({ children }) =
 
   const createProject = async (data: { name: string; game_info?: GameInfo; market_targets?: MarketTarget[] }) => {
     try {
-      const res = await axios.post<Project>(`${API_BASE}/api/projects`, data);
+      const res = await axios.post<Project>(`${API_BASE}/api/projects/`, data);
       const newProj = res.data;
-      setProjects(prev => [...prev, newProj]);
-      setCurrentProject(newProj);
+      if (isMounted.current) {
+          setProjects(prev => [...prev, newProj]);
+          setCurrentProject(newProj);
+      }
       return newProj;
     } catch (err: any) {
        console.error("Failed to create project", err);
@@ -128,8 +140,10 @@ export const ProjectProvider: React.FC<{children: ReactNode}> = ({ children }) =
      try {
         const res = await axios.put<Project>(`${API_BASE}/api/projects/${id}`, data);
         const updated = res.data;
-        setProjects(prev => prev.map(p => p.id === id ? updated : p));
-        _setCurrentProject(prev => prev?.id === id ? updated : prev);
+        if (isMounted.current) {
+            setProjects(prev => prev.map(p => p.id === id ? updated : p));
+            _setCurrentProject(prev => prev?.id === id ? updated : prev);
+        }
         return updated;
      } catch (err: any) {
         console.error("Failed to update project", err);
@@ -140,10 +154,12 @@ export const ProjectProvider: React.FC<{children: ReactNode}> = ({ children }) =
   const deleteProject = async (id: string) => {
     try {
       await axios.delete(`${API_BASE}/api/projects/${id}`);
-      setProjects(prev => prev.filter(p => p.id !== id));
-      if (currentProject?.id === id) {
-        _setCurrentProject(null);
-        localStorage.removeItem('adcreative_current_project_id');
+      if (isMounted.current) {
+          setProjects(prev => prev.filter(p => p.id !== id));
+          if (currentProject?.id === id) {
+            _setCurrentProject(null);
+            localStorage.removeItem('adcreative_current_project_id');
+          }
       }
     } catch (err: any) {
       console.error("Failed to delete project", err);

@@ -1,0 +1,30 @@
+{
+    "name": "ASMR",
+    "short_name": "ASMR",
+    "description": "A top-tier psychological conversion model based on 'need for cognitive closure' and 'sensory immersion'. By releasing extremely smooth visual friction and hyper-compressed Foley sound effects, it pushes users' dopamine to the peak, then 'maliciously cuts off' at the moment just before 99% completion, leveraging the Zeigarnik effect (unfinished frustration) to force conversion.",
+    "focus": [
+        "Visual friction transformation: The opening must show an extremely sticky, clogged, chaotic 'high-pressure state', then transition to a frictionless 'mowing/cleaning/synthesis' process, creating ultimate pleasure in order reconstruction.",
+        "Brain-tingling sound effects: Abandon all conventional BGM. Core feedback must use hyper-compressed 3D ambient sounds—like bursting crunch, dense coin rain, crisp glass shattering—to directly stimulate the auditory nerve.",
+        "99% malicious cutoff (The Blue-ball Cutoff): At 99% progress, just before the ultimate satisfaction key frame, the screen must instantly black out or pop up 'Play to finish', using deprivation to create a strong physical urge to download."
+    ],
+    "rules": [
+        "Macro-lens POV: The visual center must be extremely focused (macro close-up), removing all UI, useless backgrounds, stamina bars, etc., leaving users nowhere to look away.",
+        "Exponential acceleration rhythm: The relaxing action (e.g., mowing, eliminating) must not be constant speed! It should be slightly difficult at first, then accelerate exponentially, combined with increasing pitch to push pleasure to frenzy.",
+        "Minimalism or even 'visual aphasia': Absolutely no complex text or voiceover throughout; not even any words. Rely purely on physics and audio-visual sync to transcend all language and cultural barriers."
+    ],
+    "constraints": [
+        "Absolutely prohibit triggering trypophobia or physiological discomfort (e.g., maggots, pustules, diseased organs), as this will cause extremely bad comment backlash and trigger severe platform demotion or account suspension.",
+        "Absolutely prohibit any frame drops or physics clipping: the core of relaxation is 'smoothness'; any visual dissonance (e.g., lawnmower stuck, delay in synthesis) will instantly break the flow state and cause drop-off.",
+        "Absolutely prohibit fast-paced electronic music, rock, or any voiceover: any human language or emotional music will awaken the user's rational brain and destroy the subconscious hypnotic state created by ASMR."
+    ],
+    "core_emotion": "Extreme comfort, dopamine rush from order reconstruction, frustration from incompleteness (OCD deprivation)",
+    "visual_tempo": "From sticky clogging (creating anxiety) to frictionless exponential sliding (releasing dopamine), then blackout cutoff at 99%.",
+    "logic_steps": [
+        "Hook (0-2s): Painful opening—show extreme chaos, intertwined or OCD-triggering 'dead end'.",
+        "Build-up (2-8s): Smooth intervention—soothing cleaning/elimination begins, accompanied by high-density ASMR physical Foley effects.",
+        "Climax (8-12s): Frenzied chain—trigger large-scale chain reactions, screen filled with gorgeous particles and crisp sound effects.",
+        "CTA (12s+): 99% cutoff—0.1 seconds before the last piece fits or the last blade of grass is cut, the screen stops, throwing out the download button."
+    ],
+    "audio_strategy": "Pure Foley art show. Zero background music, zero vocals. Maximally amplify all physical interaction sounds (cutting 'shhh', synthesis 'pop'), with frequency bands enhanced for phone speakers to boost crispness.",
+    "id": "angle_asmr_satisfying"
+}

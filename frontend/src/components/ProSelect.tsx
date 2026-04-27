@@ -13,10 +13,11 @@ interface ProSelectProps {
   onChange: (val: string) => void;
   options: (string | ProSelectOption)[];
   className?: string;
+  buttonClassName?: string;
   dropUp?: boolean;
 }
 
-export const ProSelect: React.FC<ProSelectProps> = ({ value, onChange, options, className = '', dropUp = false }) => {
+export const ProSelect: React.FC<ProSelectProps> = ({ value, onChange, options, className = '', buttonClassName = '', dropUp = false }) => {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -54,9 +55,9 @@ export const ProSelect: React.FC<ProSelectProps> = ({ value, onChange, options, 
         }}
         className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-left text-xs font-bold transition-all shadow-sm ${
           isOpen
-            ? 'bg-surface-container-high border-secondary/50 ring-2 ring-secondary/20 z-20 relative'
-            : 'bg-surface-container border-outline-variant/40 hover:bg-surface-container-high hover:border-outline-variant/60 text-on-surface'
-        }`}
+             ? 'bg-surface-container-high border-secondary/50 ring-2 ring-secondary/20 z-20 relative'
+             : 'bg-surface-container border-outline-variant/40 hover:bg-surface-container-high hover:border-outline-variant/60 text-on-surface'
+        } ${buttonClassName}`}
       >
         <span className="truncate">{selectedOption?.label || value}</span>
         <ChevronDown className={`w-4 h-4 text-on-surface-variant transition-transform duration-200 ${isOpen ? 'rotate-180 text-secondary' : ''}`} />
@@ -72,19 +73,21 @@ export const ProSelect: React.FC<ProSelectProps> = ({ value, onChange, options, 
             onAnimationComplete={() => {
                if (isOpen && inputRef.current) inputRef.current.focus();
             }}
-            className={`absolute left-0 w-full z-[100] min-w-full bg-surface-container-highest/80 backdrop-blur-3xl border border-outline-variant/30 rounded-xl shadow-elev-2 flex flex-col overflow-hidden ${dropUp ? 'bottom-full mb-1' : 'top-full mt-1'}`}
+            className={`absolute left-0 min-w-full w-max z-[100] bg-surface-container-highest/80 backdrop-blur-3xl border border-outline-variant/30 rounded-xl shadow-elev-2 flex flex-col overflow-hidden ${dropUp ? 'bottom-full mb-1' : 'top-full mt-1'}`}
           >
-            <div className="p-2 border-b border-outline-variant/20 shrink-0">
-              <input 
-                ref={inputRef}
-                type="text" 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={t('components.pro_select_search')}
-                className="w-full bg-surface-container text-[11px] text-on-surface px-3 py-1.5 rounded-md border border-outline-variant/30 focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/50 placeholder:text-on-surface-variant/50"
-                onClick={(e) => e.stopPropagation()}
-              />
-            </div>
+            {normalizedOptions.length > 6 && (
+              <div className="p-2 border-b border-outline-variant/20 shrink-0">
+                <input 
+                  ref={inputRef}
+                  type="text" 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={t('components.pro_select_search')}
+                  className="w-full bg-surface-container text-[11px] text-on-surface px-3 py-1.5 rounded-md border border-outline-variant/30 focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/50 placeholder:text-on-surface-variant/50"
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </div>
+            )}
             <div className="max-h-[200px] overflow-y-auto custom-scrollbar py-1">
               {filteredOptions.length === 0 ? (
                  <div className="px-3 py-4 text-center text-[10px] text-on-surface-variant font-mono">
@@ -101,14 +104,26 @@ export const ProSelect: React.FC<ProSelectProps> = ({ value, onChange, options, 
                       onChange(opt.value);
                       setIsOpen(false);
                     }}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left transition-colors ${
+                    className={`w-full flex items-center justify-between px-4 py-2.5 text-xs text-left transition-all duration-200 relative group/item ${
                       isActive
-                        ? 'bg-primary/10 text-primary-dim font-extrabold'
-                        : 'text-on-surface hover:bg-surface-container-low font-medium'
+                        ? 'bg-primary/15 text-primary font-black'
+                        : 'text-on-surface hover:bg-surface-container-low hover:text-primary'
                     }`}
                   >
-                    <span className="truncate block pr-2">{opt.label}</span>
-                    {isActive && <Check className="w-3.5 h-3.5 shrink-0" />}
+                    <div className="flex items-center gap-2 min-w-0">
+                      {isActive && (
+                        <motion.div 
+                          layoutId="active-indicator"
+                          className="absolute left-0 w-1 h-1/2 bg-primary rounded-r-full"
+                        />
+                      )}
+                      <span className="truncate block font-medium tracking-tight">{opt.label}</span>
+                    </div>
+                    {isActive ? (
+                      <Check className="w-3.5 h-3.5 text-primary shrink-0" />
+                    ) : (
+                      <div className="w-1.5 h-1.5 rounded-full bg-on-surface-variant/20 group-hover/item:bg-primary/40 transition-colors shrink-0" />
+                    )}
                   </button>
                 );
               })

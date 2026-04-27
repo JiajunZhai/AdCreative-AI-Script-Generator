@@ -1,0 +1,59 @@
+{
+    "_metadata": {
+        "updated_at": "2026-04-24T08:43:56.621Z",
+        "version": "1.1"
+    },
+    "category": "regions",
+    "constraints": [
+        "Absolutely prohibit using stiff machine translation, e.g., translating 'Play' as '演じる'.",
+        "Absolutely prohibit directly displaying blood, excessive violence, or explicit content, otherwise account banned.",
+        "Absolutely prohibit vulgar or overly low-intelligence content; all bait must be packaged under refined art.",
+        "Avoid using forced video views; Japanese users prefer interactive demos.",
+        "Assets must meet Japanese cultural requirements for politeness and quality; even inducement must be 'polite'."
+    ],
+    "creative_hooks": [
+        "Shame/anger inducement: avatar picks wrong simplest kanji or logic question, paired with 'zannen' sound effect.",
+        "Excess reward: splash screen shows full-screen gold SSR or 777 multi-pull animation.",
+        "Visual contrast: messy dirty room vs immaculate tidy, or weak small monster vs maxed legendary gear.",
+        "Qualification theory: '99% of Japanese cannot clear'.",
+        "Welfare theory: 'Now 3000 free gacha pulls'.",
+        "Simplicity theory: 'No install needed / play in 1 minute'.",
+        "Social exclusion: 'Everyone is playing now', 'Don't miss out'.",
+        "Evolution branching: shows character evolves into different forms based on player decisions.",
+        "Pseudo-live: simulates VTuber exclaiming or trash-talking game operations.",
+        "ASMR + intelligence: combines smooth relaxing process with IQ test."
+    ],
+    "culture_notes": [
+        "Japanese users have compulsion for gacha (card drawing); assets must highlight gacha mechanism.",
+        "Healing and relaxation (Iyashi) is an important psychological need; ASMR sound effects and smooth animations work well.",
+        "Fear of social exclusion: copy often uses 'everyone is playing', 'don't fall behind' to leverage herd mentality.",
+        "Showa-era nostalgic style can evoke collective memory, suitable for simulation management games.",
+        "Niconico-style bullet comment telop subtitles are a Japanese specialty, enhancing variety show feel and familiarity.",
+        "VTuber pseudo-live streaming perspective can lower user defensiveness and increase trust.",
+        "Evolution branching model satisfies collection addiction, showing characters evolve into different forms based on player decisions."
+    ],
+    "description": "The Japanese casual game market centers on quality and psychological resonance, emphasizing trust, refined art, and localized details. Avoid vulgarity and machine translation. Utilize psychological triggers such as gacha compulsion, healing and relaxation, and fear of social exclusion. Ad formats focus on vertical short videos and interactive demos. The golden 3 seconds must include shame/anger induction, excess reward display, or visual contrast. The hit formula: incompetent failure inducement + reversal gift gacha + variety-style telop subtitles.",
+    "focus": [
+        "heavy game lightweighting",
+        "ultra-light game sub-game conversion",
+        "psychological resonance",
+        "trust",
+        "localization"
+    ],
+    "id": "new_region_1777018097344",
+    "language": "ja",
+    "name": "日本",
+    "rules": [
+        "Must use refined, high-saturation art style, simulating Nintendo-like liveliness or Showa-era nostalgic tones.",
+        "Golden 3 seconds must include shame/anger induction (e.g., avatar choosing wrong simple question), excess reward display (e.g., full screen SSR), or visual contrast (messy vs tidy).",
+        "Must incorporate gacha mechanism display, logic: show failure -> give free multi-pull -> pull legendary equipment and counterattack.",
+        "Must use high-quality voice actor narration or recognizable AI girl voice (e.g., Zundamon voice).",
+        "Copy must use qualification theory (99% of Japanese cannot clear), welfare theory (now 3000 free pulls), or simplicity theory (no install / play in 1 minute).",
+        "CTA must use '体験する' (try now) or '続きをプレイ' (play more), combined with left-right swipe dynamic gesture.",
+        "Must add variety-style telop subtitles, imitating Niconico comment style to enhance visual impact.",
+        "Sound effects must include catchy BGM (8-bit electronic music or short melody) and crisp coin feedback sound (simulating pachinko).",
+        "Asset life cycle controlled within 7-14 days, avoid repeated assets.",
+        "Must include interactive demo elements to improve conversion rate."
+    ],
+    "short_name": "日本"
+}

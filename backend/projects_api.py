@@ -28,12 +28,6 @@ WORKSPACE_DIR = Path(__file__).resolve().parent / "data" / "workspaces"
 
 
 class GameInfo(BaseModel):
-    # Legacy fields for backward compatibility
-    core_gameplay: str = ""
-    core_usp: str = ""
-    target_persona: str = ""
-    value_hooks: str = ""
-
     # Advanced 5-Pillar Project DNA
     core_loop: str = Field(default="", description="The mechanical loop (e.g., Mow down -> Drop -> Upgrade).")
     usp: dict[str, str] = Field(default_factory=dict, description="Matrix of visual, gameplay, stats, and social hooks.")
@@ -317,6 +311,21 @@ def update_history_decision(
             process_diff_feedback(script_id, diff_length)
         except Exception:
             pass
+    return cur.rowcount > 0
+
+def mark_history_winner(script_id: str, performance_stats: dict[str, Any] | None = None) -> bool:
+    """Toggles the is_winner flag and updates performance_stats."""
+    stats_json = json.dumps(performance_stats or {}, ensure_ascii=False)
+    cur = get_conn().execute(
+        """
+        UPDATE history_log
+        SET is_winner = 1,
+            performance_stats = ?,
+            payload_json = json_set(payload_json, '$.is_winner', 1, '$.performance_stats', ?)
+        WHERE id = ? OR script_id = ?
+        """,
+        (stats_json, stats_json, script_id, script_id),
+    )
     return cur.rowcount > 0
 
 

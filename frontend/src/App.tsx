@@ -3,12 +3,10 @@ import { ShellActivityProvider } from './context/ShellActivityContext';
 import { ProjectProvider } from './context/ProjectContext';
 import { MainLayout } from './layout/MainLayout';
 import { Lab } from './pages/Lab';
-import { OracleIngestion } from './pages/OracleIngestion';
-import { Dashboard } from './pages/Dashboard';
-import { ComplianceAdmin } from './pages/ComplianceAdmin';
-import { ProviderSettings } from './pages/ProviderSettings';
-import { EntryPortal } from './pages/EntryPortal';
+import { CopyLab } from './pages/CopyLab';
 import { WorkspaceHub } from './pages/WorkspaceHub';
+import { EntryPortal } from './pages/EntryPortal';
+import { ComplianceAdmin } from './pages/ComplianceAdmin';
 
 function App() {
   return (
@@ -18,14 +16,13 @@ function App() {
         <Routes>
           <Route path="/" element={<EntryPortal />} />
           <Route path="/hub" element={<WorkspaceHub />} />
+
           <Route path="/*" element={
             <MainLayout>
               <Routes>
-                <Route path="dashboard" element={<Dashboard />} />
                 <Route path="generator" element={<Lab />} />
-                <Route path="oracle" element={<OracleIngestion />} />
+                <Route path="copy-lab" element={<CopyLab />} />
                 <Route path="compliance" element={<ComplianceAdmin />} />
-                <Route path="settings/providers" element={<ProviderSettings />} />
                 <Route path="*" element={<Navigate to="/hub" replace />} />
               </Routes>
             </MainLayout>

@@ -27,6 +27,39 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+try:
+    import openai
+    _original_create = openai.resources.chat.completions.Completions.create
+
+    def _patched_create(self, *args, **kwargs):
+        model = kwargs.get("model")
+        if isinstance(model, str):
+            if "deepseek-v4" in model:
+                if model.endswith("-reasoner"):
+                    kwargs["model"] = model.replace("-reasoner", "")
+                    kwargs.setdefault("extra_body", {})
+                    if "thinking" not in kwargs["extra_body"]:
+                        kwargs["extra_body"]["thinking"] = {"type": "enabled"}
+                else:
+                    kwargs.setdefault("extra_body", {})
+                    if "thinking" not in kwargs["extra_body"]:
+                        kwargs["extra_body"]["thinking"] = {"type": "disabled"}
+            # Keep backward compatibility for older aliases if any logic still uses them
+            elif model == "deepseek-reasoner":
+                kwargs["model"] = "deepseek-v4-flash"
+                kwargs.setdefault("extra_body", {})
+                kwargs["extra_body"]["thinking"] = {"type": "enabled"}
+            elif model == "deepseek-chat":
+                kwargs["model"] = "deepseek-v4-flash"
+                kwargs.setdefault("extra_body", {})
+                kwargs["extra_body"]["thinking"] = {"type": "disabled"}
+                
+        return _original_create(self, *args, **kwargs)
+
+    openai.resources.chat.completions.Completions.create = _patched_create
+except ImportError:
+    pass
+
 
 @dataclass(frozen=True)
 class ProviderSpec:
@@ -45,26 +78,36 @@ class ProviderSpec:
     default_price_completion_cny: float = 0.002
     # Free-form note shown in the /api/providers response (e.g. "deferred").
     note: str = ""
+    # Default context window for the provider's default model (tokens).
+    context_length: int = 64000
     # A short list of commonly-used model ids for the UI's model dropdown.
     model_choices: tuple[str, ...] = field(default_factory=tuple)
+    # Lifecycle status: "stable" | "beta" | "deprecated"
+    status: str = "stable"
 
 
 # Provider catalog. Order here drives the UI dropdown order.
 PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         id="deepseek",
-        label="DeepSeek",
+        label="DeepSeek(深度求索)",
         api_key_env="DEEPSEEK_API_KEY",
         base_url_env="DEEPSEEK_BASE_URL",
         default_base_url="https://api.deepseek.com",
         model_env="DEEPSEEK_MODEL",
-        default_model="deepseek-chat",
+        default_model="deepseek-v4-flash",
         supports_json_mode=True,
         price_prompt_env="DEEPSEEK_PRICE_PROMPT_CNY_PER_1K",
         price_completion_env="DEEPSEEK_PRICE_COMPLETION_CNY_PER_1K",
         default_price_prompt_cny=0.001,
         default_price_completion_cny=0.002,
-        model_choices=("deepseek-chat", "deepseek-reasoner"),
+        context_length=1000000,
+        model_choices=(
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-reasoner",
+            "deepseek-v4-pro",
+            "deepseek-v4-pro-reasoner"
+        ),
     ),
     ProviderSpec(
         id="siliconflow",
@@ -79,6 +122,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         price_completion_env="SILICONFLOW_PRICE_COMPLETION_CNY_PER_1K",
         default_price_prompt_cny=0.001,
         default_price_completion_cny=0.002,
+        context_length=128000,
         model_choices=(
             "deepseek-ai/DeepSeek-V3",
             "Qwen/Qwen2.5-72B-Instruct",
@@ -98,6 +142,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         price_completion_env="BAILIAN_PRICE_COMPLETION_CNY_PER_1K",
         default_price_prompt_cny=0.0008,
         default_price_completion_cny=0.002,
+        context_length=131072,
         model_choices=("qwen-plus", "qwen-max", "qwen-turbo"),
     ),
     ProviderSpec(
@@ -107,28 +152,30 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         base_url_env="OPENROUTER_BASE_URL",
         default_base_url="https://openrouter.ai/api/v1",
         model_env="OPENROUTER_MODEL",
-        default_model="deepseek/deepseek-chat",
+        default_model="deepseek/deepseek-v4-flash",
         supports_json_mode=True,
         price_prompt_env="OPENROUTER_PRICE_PROMPT_CNY_PER_1K",
         price_completion_env="OPENROUTER_PRICE_COMPLETION_CNY_PER_1K",
         default_price_prompt_cny=0.002,
         default_price_completion_cny=0.006,
+        context_length=200000,
         model_choices=(
-            "deepseek/deepseek-chat",
+            "deepseek/deepseek-v4-flash",
             "anthropic/claude-3.5-sonnet",
             "openai/gpt-4o-mini",
         ),
     ),
     ProviderSpec(
         id="zen",
-        label="Open Code ZEN (deferred)",
+        label="Open Code ZEN",
         api_key_env="ZEN_API_KEY",
         base_url_env="ZEN_BASE_URL",
         default_base_url="https://api.opencode.zen/v1",
         model_env="ZEN_MODEL",
         default_model="zen-default",
         supports_json_mode=True,
-        note="deferred",
+        note="beta",
+        status="beta",
         model_choices=("zen-default",),
     ),
 )
@@ -162,12 +209,6 @@ def _load_store():
 
 def _resolved_api_key(provider_id: str) -> tuple[Optional[str], str]:
     spec = get_provider_spec(provider_id)
-    store = _load_store()
-    if store is not None:
-        try:
-            return store.resolve_api_key(spec.id, spec.api_key_env)
-        except Exception:
-            pass
     env_val = os.getenv(spec.api_key_env)
     if env_val and env_val.strip():
         return env_val.strip(), "env"
@@ -201,15 +242,6 @@ def resolve_model(provider_id: Optional[str], model: Optional[str]) -> str:
 
 def resolve_base_url(provider_id: Optional[str]) -> str:
     spec = get_provider_spec(provider_id)
-    store = _load_store()
-    if store is not None:
-        try:
-            resolved, _source = store.resolve_base_url(
-                spec.id, spec.base_url_env, spec.default_base_url
-            )
-            return resolved
-        except Exception:
-            pass
     return os.getenv(spec.base_url_env) or spec.default_base_url
 
 
@@ -284,6 +316,11 @@ def get_model_choices(provider_id: str) -> list[str]:
     return merged
 
 
+def show_experimental_providers() -> bool:
+    """Returns True if experimental/beta providers should be shown in the UI."""
+    return os.getenv("SHOW_EXPERIMENTAL_PROVIDERS", "").lower() in ("1", "true", "yes")
+
+
 def list_providers() -> list[dict[str, Any]]:
     """Snapshot intended for /api/providers — no secrets leaked."""
     store = _load_store()
@@ -340,6 +377,10 @@ def list_providers() -> list[dict[str, Any]]:
                     "prompt_cny_per_1k": prompt_price,
                     "completion_cny_per_1k": completion_price,
                 },
+                "context_length": spec.context_length,
+                "status": spec.status,
+                "last_compliance_score": getattr(settings_obj, "last_compliance_score", None),
+                "last_compliance_at": getattr(settings_obj, "last_compliance_at", None),
             }
         )
     return out

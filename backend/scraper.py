@@ -9,36 +9,34 @@ from google_play_scraper import app as gplay_app
 # main.extract_url; scraper itself only ships a rule-based fallback).
 # English-first distillation; Chinese = director-practical for domestic editors.
 # -----------------------------------------------------------------------------
-EXTRACT_USP_VIA_LLM_SYSTEM_PROMPT = """You are a senior Mobile UA Creative Director and bilingual localization bridge.
+def get_extract_usp_prompt(lang: str) -> str:
+    lang_name = "CHINESE (中文)" if lang == "cn" else "ENGLISH"
+    lang_note = "（中文详述）" if lang == "cn" else "(Detailed in English)"
+    
+    return f"""You are an elite Game Analysis AI and Senior UA Creative Director.
 
 ## Task
-Turn raw Google Play store copy into ONE JSON object: a "Bilingual Director Archive".
-Use a strict two-pass mental order:
-1) **English-first**: extract and distil mechanics, hooks, and audience signals in professional, neutral English grounded ONLY in the provided text.
-2) **Chinese director layer**: write `cn` fields for domestic video editors—shooting angles, pacing, what to stress on timeline, and why it sells—not plain word-for-word translation of `en`.
+Turn raw Google Play store copy into ONE profound JSON object: a "5-Pillar Project DNA".
+CRITICAL RULE: You MUST output profound, rich analysis IN {lang_name}. Do NOT overly truncate the insights. Read between the lines of the marketing copy to deduce the real psychological hooks, gameplay loops, and target audience. Provide director-level strategic notes.
 
 ## Output schema (pure JSON, no markdown fences)
-{
-  "core_loop": "Precise core loop / session shape / main mechanics. (e.g. Mow down -> Drop -> Upgrade)",
-  "usp": {
-    "visual": "Visual hooks",
-    "gameplay": "Gameplay hooks",
-    "stats": "Stat progression hooks",
-    "social": "Social/competitive hooks"
-  },
-  "persona": "Target player segment: motivations, genre literacy, stress-relief.",
-  "visual_dna": "Art style description (e.g. anime, realistic, dark, vibrant).",
-  "competitive_set": [
-    "Tag1", "Tag2"
-  ]
-}
+{{
+  "core_loop": "详细的核心玩法循环与玩家体验轨迹 {lang_note}",
+  "usp": {{
+    "Gameplay": "玩法设计上的核心爽点与差异化钩子 {lang_note}",
+    "Visual": "美术风格、视觉表现力及带给玩家的感官刺激 {lang_note}",
+    "Social": "社交互动、排行榜、养成反馈等长线钩子 {lang_note}",
+    "Other": "情感共鸣、解压、ASMR等其他深层心理学触发器 {lang_note}"
+  }},
+  "persona": "精确的目标受众画像、年龄层及他们的核心心理诉求 {lang_note}",
+  "visual_dna": "整体视觉基因与材质光影特征总结 {lang_note}",
+  "competitive_set": ["竞品1", "竞品2"]
+}}
 
 ## Rules
-- `en` strings: authoritative for later LLM prompts; must not invent features absent from the store text.
-- `cn` strings: actionable director notes; may reference 「建议实机验证」 if the description is vague—do NOT hide uncertainty inside `en`.
-- `value_hooks`: **3 to 5** objects; each `en`/`cn` non-empty; hooks must not repeat the same idea.
-- Prefer clarity over length; each `en` field under ~400 characters when possible.
-- Output **only** the JSON object, first character `{`, last character `}`.
+- All string values MUST be in rich, professional {lang_name}.
+- Provide actionable director notes mixed into your analysis.
+- Output **only** the JSON object, first character `{{`, last character `}}`.
 """
 
 
@@ -90,16 +88,12 @@ def _valid_bilingual_pair(obj: Any) -> bool:
 def _validate_director_archive(data: Dict[str, Any]) -> bool:
     if not isinstance(data, dict):
         return False
-    if not _valid_bilingual_pair(data.get("core_gameplay")):
+    if not _nonempty_str(data.get("core_loop")):
         return False
-    if not _valid_bilingual_pair(data.get("target_persona")):
+    if not _nonempty_str(data.get("persona")):
         return False
-    hooks = data.get("value_hooks")
-    if not isinstance(hooks, list) or len(hooks) < 3 or len(hooks) > 5:
+    if not isinstance(data.get("usp"), dict):
         return False
-    for h in hooks:
-        if not _valid_bilingual_pair(h):
-            return False
     return True
 
 
@@ -225,10 +219,10 @@ def _rule_based_director_archive(game_title: str, metadata: Dict[str, Any]) -> D
     return {
         "core_loop": f"{core_en.strip()} / {core_cn.strip()}",
         "usp": {
-            "gameplay": hooks_en[0] if len(hooks_en) > 0 else "",
-            "visual": hooks_en[1] if len(hooks_en) > 1 else "",
-            "stats": hooks_en[2] if len(hooks_en) > 2 else "",
-            "social": hooks_en[3] if len(hooks_en) > 3 else ""
+            "Gameplay": hooks_en[0] if len(hooks_en) > 0 else "",
+            "Visual": hooks_en[1] if len(hooks_en) > 1 else "",
+            "Social": hooks_en[2] if len(hooks_en) > 2 else "",
+            "Other": hooks_en[3] if len(hooks_en) > 3 else ""
         },
         "persona": f"{aud_en.strip()} / {aud_cn.strip()}",
         "visual_dna": visual_dna,

@@ -1,330 +1,93 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Beaker, Layers, Network, Database, Target, Lock, Play, Activity, Globe, MonitorPlay, BrainCircuit, RefreshCw, Eye, Info, Pin, PinOff, Trash2, ListPlus, ListChecks, X, CheckCircle, XCircle, Clock, Save } from 'lucide-react';
+import { Play, Activity, RefreshCw, History, Save, ListChecks, ListPlus, X, Settings, Network, Target, Globe, Wand2, Clock, Film, MessageSquare, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Link } from 'react-router-dom';
 import { API_BASE } from '../config/apiBase';
 import { useProjectContext } from '../context/ProjectContext';
 import { useShellActivity } from '../context/ShellActivityContext';
-import { ProSelect } from '../components/ProSelect';
 import { useTranslation } from 'react-i18next';
 import { ResultDashboardView } from '../components/ResultDashboardView';
 import { useLabQueue, type QueueJobPayload } from '../hooks/useLabQueue';
+import { HistoryFeedDrawer } from '../components/HistoryFeedDrawer';
+import { QueueDrawer } from '../components/lab/QueueDrawer';
+import { PresetsDrawer } from '../components/lab/PresetsDrawer';
+import { LabHeader } from '../components/lab/LabHeader';
+import { StrategyConsole } from '../components/lab/StrategyConsole';
+import { ProSelect } from '../components/ProSelect';
+
+const estimateTTSDuration = (text: string, lang: string): number => {
+  if (!text) return 0;
+  const cleanText = text.replace(/[\s\p{P}]/gu, '');
+  if (['cn', 'jp', 'kr', 'tw'].includes(lang)) {
+    return Math.ceil(cleanText.length / 4.5);
+  } else {
+    const words = text.trim().split(/\s+/).length;
+    return Math.ceil(words / 2.5);
+  }
+};
+
+const parseAllocatedSeconds = (timeStr: string): number => {
+  if (!timeStr) return 0;
+  const matches = timeStr.match(/(\d+)/g);
+  if (!matches) return 0;
+  if (matches.length === 1) return parseInt(matches[0], 10);
+  if (matches.length >= 2) return Math.abs(parseInt(matches[1], 10) - parseInt(matches[0], 10));
+  return 0;
+};
 
 export const Lab: React.FC = () => {
-  const { t } = useTranslation();
   const { currentProject } = useProjectContext();
   const { setGeneratorShell } = useShellActivity();
+  const { t } = useTranslation();
+  const navigate = useNavigate();
 
   // State
   const [metadata, setMetadata] = useState<any>({ regions: [], platforms: [], angles: [] });
   const [regionId, setRegionId] = useState<string>('');
   const [platformId, setPlatformId] = useState<string>('');
   const [angleId, setAngleId] = useState<string>('');
-  const [outputType, setOutputType] = useState<'full_sop' | 'quick_copy'>(() => {
-    const saved = localStorage.getItem('sop_output_type');
-    return saved === 'quick_copy' ? 'quick_copy' : 'full_sop';
-  });
-  const [copyQuantity, setCopyQuantity] = useState<number>(() => {
-    const raw = Number(localStorage.getItem('sop_copy_quantity') || '20');
-    return Number.isFinite(raw) && raw > 0 ? Math.min(Math.max(raw, 10), 200) : 20;
-  });
-  const [copyTones, setCopyTones] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem('sop_copy_tones');
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.map(String) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [copyLocales, setCopyLocales] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem('sop_copy_locales');
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.map(String) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [copyRegionIds, setCopyRegionIds] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem('sop_copy_region_ids');
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.map(String) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [outputMode, setOutputMode] = useState<'cn' | 'en'>(() => {
-    const saved = localStorage.getItem('sop_output_mode');
-    return saved === 'en' ? 'en' : 'cn';
-  });
-  const [synthesisMode, setSynthesisMode] = useState<'auto' | 'draft' | 'director'>(() => {
-    const saved = localStorage.getItem('sop_synthesis_mode');
-    return saved === 'draft' || saved === 'director' ? saved : 'auto';
-  });
-  const [baseScriptId, setBaseScriptId] = useState<string>(() => {
-    return String(localStorage.getItem('sop_base_script_id') || '');
-  });
-  const [complianceSuggest, setComplianceSuggest] = useState<boolean>(() => {
-    return localStorage.getItem('sop_compliance_suggest') === '1';
-  });
+  const [contextPreview, setContextPreview] = useState<any>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [contextPreviewError, setContextPreviewError] = useState<string | null>(null);
+  const [previewRetry, setPreviewRetry] = useState(0);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
 
-  // Phase 25 / D3 — Engine Selector state. Provider + model are persisted so
-  // power users don't have to re-select each session. An empty provider means
-  // "let the server pick its default" (usually DeepSeek).
-  const [engineProvider, setEngineProvider] = useState<string>(() => {
-    return String(localStorage.getItem('sop_engine_provider') || '');
-  });
-  const [engineModel, setEngineModel] = useState<string>(() => {
-    return String(localStorage.getItem('sop_engine_model') || '');
-  });
-  const [providersCatalog, setProvidersCatalog] = useState<any[]>([]);
-  const [defaultProviderId, setDefaultProviderId] = useState<string>('deepseek');
+  const [outputMode, setOutputMode] = useState<'cn' | 'en'>(() => localStorage.getItem('sop_output_mode') === 'en' ? 'en' : 'cn');
+  const [engineProvider, setEngineProvider] = useState<string>(() => String(localStorage.getItem('sop_engine_provider') || ''));
+  const [engineModel, setEngineModel] = useState<string>(() => String(localStorage.getItem('sop_engine_model') || ''));
+
+
+  const [synthesisMode, setSynthesisMode] = useState<'auto' | 'draft' | 'director'>('auto');
+  const [complianceSuggest] = useState<boolean>(true);
 
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [synthesisResult, setSynthesisResult] = useState<any>(null);
-  const [isSyncingFeed, setIsSyncingFeed] = useState(false);
   const [dashboardOpen, setDashboardOpen] = useState(false);
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
 
-  // Phase 23 / B2 — Pre-flight cost estimate (debounced)
-  const [estimate, setEstimate] = useState<any>(null);
-  const [estimateLoading, setEstimateLoading] = useState(false);
+  const [presetsOpen, setPresetsOpen] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
 
-  // Syncing simulation hook
-  useEffect(() => {
-    if (regionId || platformId || angleId) {
-      setIsSyncingFeed(true);
-      const timer = setTimeout(() => setIsSyncingFeed(false), 600);
-      return () => clearTimeout(timer);
-    }
-  }, [regionId, platformId, angleId]);
+  // Intel Constraint Overlay
+  const [intelConstraint, setIntelConstraint] = useState<string>('');
 
-  useEffect(() => {
-    localStorage.setItem('sop_output_mode', outputMode);
-  }, [outputMode]);
-  useEffect(() => {
-    localStorage.setItem('sop_synthesis_mode', synthesisMode);
-  }, [synthesisMode]);
-  useEffect(() => {
-    localStorage.setItem('sop_output_type', outputType);
-  }, [outputType]);
-  useEffect(() => {
-    localStorage.setItem('sop_copy_quantity', String(copyQuantity));
-  }, [copyQuantity]);
-  useEffect(() => {
-    localStorage.setItem('sop_copy_tones', JSON.stringify(copyTones));
-  }, [copyTones]);
-  useEffect(() => {
-    localStorage.setItem('sop_copy_locales', JSON.stringify(copyLocales));
-  }, [copyLocales]);
-  useEffect(() => {
-    localStorage.setItem('sop_copy_region_ids', JSON.stringify(copyRegionIds));
-  }, [copyRegionIds]);
-  useEffect(() => {
-    localStorage.setItem('sop_base_script_id', baseScriptId);
-  }, [baseScriptId]);
-  useEffect(() => {
-    localStorage.setItem('sop_compliance_suggest', complianceSuggest ? '1' : '0');
-  }, [complianceSuggest]);
-  useEffect(() => {
-    localStorage.setItem('sop_engine_provider', engineProvider);
-  }, [engineProvider]);
-  useEffect(() => {
-    localStorage.setItem('sop_engine_model', engineModel);
-  }, [engineModel]);
+  const [refineInstruction, setRefineInstruction] = useState('');
+  const [isRefining, setIsRefining] = useState(false);
 
-  // Phase 25/D3 — pull the provider catalog once on mount.
-  useEffect(() => {
-    axios
-      .get(`${API_BASE}/api/providers`)
-      .then((res) => {
-        const body = res.data || {};
-        setProvidersCatalog(Array.isArray(body.providers) ? body.providers : []);
-        if (body.default_provider_id) setDefaultProviderId(String(body.default_provider_id));
-      })
-      .catch(() => {
-        setProvidersCatalog([]);
-      });
-  }, []);
+  const [noKeyConfigured, setNoKeyConfigured] = useState(false);
+  const [providerWarning, setProviderWarning] = useState<string | null>(null);
+  const [infoToast, setInfoToast] = useState<{message: string, isFailover?: boolean} | null>(null);
 
-  // When user picks a provider but no explicit model, reset model so the
-  // dropdown re-fills with that provider's choices on next render.
-  useEffect(() => {
-    if (!engineProvider) return;
-    const spec = providersCatalog.find((p: any) => p.id === engineProvider);
-    if (!spec) return;
-    if (engineModel && !(spec.model_choices || []).includes(engineModel)) {
-      setEngineModel('');
-    }
-  }, [engineProvider, providersCatalog, engineModel]);
-
-  useEffect(() => {
-    if (outputType === 'quick_copy' && regionId && copyRegionIds.length === 0) {
-      setCopyRegionIds([regionId]);
-    }
-  }, [outputType, regionId, copyRegionIds.length]);
-
-  // B2 — debounced estimate fetcher. Parameters that affect cost are
-  // watched; 300ms debounce avoids hammering the endpoint on every keystroke.
-  useEffect(() => {
-    if (!regionId) return;
-    const payload: any = {
-      kind:
-        outputType === 'quick_copy'
-          ? 'quick_copy'
-          : synthesisMode === 'draft'
-          ? 'generate_draft'
-          : 'generate_full',
-      mode: synthesisMode,
-      compliance_suggest: complianceSuggest,
-    };
-    if (outputType === 'quick_copy') {
-      payload.quantity = copyQuantity;
-      payload.locales = copyLocales;
-      payload.region_ids = copyRegionIds.length ? copyRegionIds : [regionId];
-    }
-    if (engineProvider) payload.engine_provider = engineProvider;
-    const handle = window.setTimeout(() => {
-      setEstimateLoading(true);
-      axios
-        .post(`${API_BASE}/api/estimate`, payload)
-        .then((res) => setEstimate(res.data))
-        .catch(() => setEstimate(null))
-        .finally(() => setEstimateLoading(false));
-    }, 300);
-    return () => window.clearTimeout(handle);
-  }, [
-    outputType,
-    synthesisMode,
-    complianceSuggest,
-    copyQuantity,
-    copyLocales,
-    copyRegionIds,
-    regionId,
-    engineProvider,
-  ]);
-
-  // Fetch DB
-  useEffect(() => {
-    axios.get(`${API_BASE}/api/insights/metadata`).then(res => {
-      setMetadata(res.data);
-      if (res.data.regions.length > 0) setRegionId(res.data.regions[0].id);
-      if (res.data.platforms.length > 0) setPlatformId(res.data.platforms[0].id);
-      if (res.data.angles.length > 0) setAngleId(res.data.angles[0].id);
-    }).catch(err => console.error("Failed to fetch insights metadata:", err));
-  }, []);
-
-  useEffect(() => {
-    setGeneratorShell(isSynthesizing, isSynthesizing ? t('lab.synthesis_status') : '');
-    return () => setGeneratorShell(false, '');
-  }, [isSynthesizing, setGeneratorShell, t]);
-
-  const activeRegion = metadata.regions.find((r: any) => r.id === regionId);
-  const activePlatform = metadata.platforms.find((p: any) => p.id === platformId);
-  const activeAngle = metadata.angles.find((a: any) => a.id === angleId);
-
-  const handleSynthesize = async () => {
-    if (!currentProject) {
-        alert(t('lab.alert_no_project'));
-        return;
-    }
-    setIsSynthesizing(true);
-    setSynthesisResult(null);
-    try {
-      const engine = "cloud";
-      const payloadBase: any = {
-        project_id: currentProject.id,
-        region_id: regionId,
-        platform_id: platformId,
-        angle_id: angleId,
-        engine,
-        output_mode: outputMode,
-        compliance_suggest: complianceSuggest,
-      };
-      if (engineProvider) payloadBase.engine_provider = engineProvider;
-      if (engineModel) payloadBase.engine_model = engineModel;
-      const response = outputType === 'quick_copy'
-        ? await axios.post(`${API_BASE}/api/quick-copy`, {
-            ...payloadBase,
-            quantity: copyQuantity,
-            tones: copyTones,
-            locales: copyLocales,
-            region_ids: copyRegionIds,
-          })
-        : await axios.post(`${API_BASE}/api/generate`, {
-            ...payloadBase,
-            mode: synthesisMode,
-          });
-      setSynthesisResult(response.data);
-      setDashboardOpen(true);
-    } catch (e) {
-      console.error(e);
-      alert(t('lab.errors.synthesis_failed'));
-    } finally {
-      setIsSynthesizing(false);
-    }
+  const handleScriptEdit = (idx: number, field: string, value: string) => {
+    if (!synthesisResult || !synthesisResult.script) return;
+    const nextScript = [...synthesisResult.script];
+    nextScript[idx] = { ...nextScript[idx], [field]: value };
+    setSynthesisResult({ ...synthesisResult, script: nextScript });
   };
 
-  // Result Dashboard behavior (body scroll lock / markdown fetch) is handled inside ResultDashboardView.
-
-  // Markdown/PDF/Open-folder exports are handled inside ResultDashboardView.
-
-  const handleRefreshCopy = async () => {
-    if (!currentProject) return;
-    const sid = (baseScriptId || '').trim();
-    if (!sid) return;
-    setIsSynthesizing(true);
-    setSynthesisResult(null);
-    try {
-      const engine = "cloud";
-      const refreshPayload: any = {
-        project_id: currentProject.id,
-        base_script_id: sid,
-        engine,
-        output_mode: outputMode,
-        quantity: copyQuantity,
-        tones: copyTones,
-        locales: copyLocales,
-        compliance_suggest: complianceSuggest,
-      };
-      if (engineProvider) refreshPayload.engine_provider = engineProvider;
-      if (engineModel) refreshPayload.engine_model = engineModel;
-      const resp = await axios.post(`${API_BASE}/api/quick-copy/refresh`, refreshPayload);
-      setSynthesisResult(resp.data);
-      setDashboardOpen(true);
-    } catch (e) {
-      console.error(e);
-      alert(t('lab.errors.refresh_failed'));
-    } finally {
-      setIsSynthesizing(false);
-    }
-  };
-
-  // B3 — Queue & Presets
-  const buildCurrentPayload = useCallback((): QueueJobPayload | null => {
-    if (!currentProject) return null;
-    const overrides: { engine_provider?: string; engine_model?: string } = {};
-    if (engineProvider) overrides.engine_provider = engineProvider;
-    if (engineModel) overrides.engine_model = engineModel;
-    if (outputType === 'quick_copy') {
-      return {
-        kind: 'quick_copy',
-        project_id: currentProject.id,
-        region_id: regionId,
-        platform_id: platformId,
-        angle_id: angleId,
-        engine: 'cloud',
-        output_mode: outputMode,
-        compliance_suggest: complianceSuggest,
-        quantity: copyQuantity,
-        tones: copyTones,
-        locales: copyLocales,
-        region_ids: copyRegionIds.length ? copyRegionIds : [regionId],
-        ...overrides,
-      };
-    }
+  const currentPayloadBuilder = useCallback((): QueueJobPayload | null => {
+    if (!currentProject || !regionId || !platformId || !angleId) return null;
     return {
       kind: 'full_sop',
       project_id: currentProject.id,
@@ -332,116 +95,306 @@ export const Lab: React.FC = () => {
       platform_id: platformId,
       angle_id: angleId,
       engine: 'cloud',
+      engine_provider: engineProvider || undefined,
+      engine_model: engineModel || undefined,
       output_mode: outputMode,
       compliance_suggest: complianceSuggest,
-      mode: synthesisMode,
-      ...overrides,
+      mode: synthesisMode
     };
-  }, [
-    currentProject,
-    outputType,
-    regionId,
-    platformId,
-    angleId,
-    outputMode,
-    complianceSuggest,
-    copyQuantity,
-    copyTones,
-    copyLocales,
-    copyRegionIds,
-    synthesisMode,
-    engineProvider,
-    engineModel,
-  ]);
+  }, [currentProject, regionId, platformId, angleId, engineProvider, engineModel, outputMode, complianceSuggest, synthesisMode]);
 
-  const queueRunner = useCallback(async (payload: QueueJobPayload) => {
-    let response;
-    if (payload.kind === 'quick_copy') {
-      response = await axios.post(`${API_BASE}/api/quick-copy`, payload);
-    } else if (payload.kind === 'refresh_copy') {
-      response = await axios.post(`${API_BASE}/api/quick-copy/refresh`, payload);
-    } else {
-      const { kind, ...rest } = payload;
-      response = await axios.post(`${API_BASE}/api/generate`, rest);
+  const handleRefine = async () => {
+    if (!synthesisResult?.script_id || !refineInstruction.trim()) return;
+    setIsRefining(true);
+    try {
+      const payload = {
+        script_id: synthesisResult.script_id,
+        instruction: refineInstruction,
+        current_script: synthesisResult.script
+      };
+      const res = await axios.post(`${API_BASE}/api/generate/refine`, payload);
+      setSynthesisResult(res.data);
+      setRefineInstruction('');
+    } catch (err: any) {
+      if (!axios.isCancel(err)) {
+        setErrorToast(err.response?.data?.detail?.error_message || 'Refinement failed');
+      }
+    } finally {
+      setIsRefining(false);
     }
-    return response.data;
-  }, []);
-
-  const labQueue = useLabQueue(queueRunner);
-  const [queueOpen, setQueueOpen] = useState(false);
-  const [presetsOpen, setPresetsOpen] = useState(false);
-  const [newPresetName, setNewPresetName] = useState('');
-
-  // Compliance rendering moved into ResultDashboardView.
-
-  const toOptions = (items: any[]) => items.map(i => ({ value: i.id, label: i.name || i.id }));
-  const outputModeOptions = useMemo(
-    () => [
-      { value: 'cn', label: t('lab.output_mode.cn') },
-      { value: 'en', label: t('lab.output_mode.en') },
-    ],
-    [t]
-  );
-  const synthesisModeOptions = useMemo(
-    () => [
-      { value: 'auto', label: t('lab.console.gen_mode_auto') },
-      { value: 'draft', label: t('lab.console.gen_mode_draft') },
-      { value: 'director', label: t('lab.console.gen_mode_director') },
-    ],
-    [t]
-  );
-
-  const copyToneOptions = useMemo(
-    () => [
-      { id: 'humor', label: t('lab.console.tones.humor') },
-      { id: 'pro', label: t('lab.console.tones.pro') },
-      { id: 'clickbait', label: t('lab.console.tones.clickbait') },
-      { id: 'benefit', label: t('lab.console.tones.benefit') },
-      { id: 'fomo', label: t('lab.console.tones.fomo') },
-    ],
-    [t]
-  );
-  const copyLocaleOptions = useMemo(
-    () => [
-      { id: 'en', label: 'English (EN)' },
-      { id: 'ja', label: '日本語 (JA)' },
-      { id: 'ar', label: 'العربية (AR)' },
-      { id: 'es', label: 'Español (ES)' },
-      { id: 'pt', label: 'Português (PT)' },
-      { id: 'fr', label: 'Français (FR)' },
-      { id: 'de', label: 'Deutsch (DE)' },
-      { id: 'id', label: 'Bahasa (ID)' },
-      { id: 'th', label: 'ไทย (TH)' },
-    ],
-    []
-  );
-
-  const isQuickCopyResult = synthesisResult && synthesisResult.ad_copy_matrix && !Array.isArray(synthesisResult.script);
-  const downloadCsv = (locale: string, rows: { primary_text: string; headline: string; hashtag_pack: string }[]) => {
-    const header = ['locale', 'headline', 'primary_text', 'hashtags'];
-    const escape = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const body = rows
-      .map((r) => [locale, r.headline, r.primary_text, r.hashtag_pack].map(escape).join(','))
-      .join('\n');
-    const csv = `${header.join(',')}\n${body}\n`;
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `copy_matrix_${locale}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
   };
 
-  // XLSX export is handled inside ResultDashboardView.
+  useEffect(() => {
+    const checkIntel = () => {
+      const rawArgs = localStorage.getItem('avocado_intel_override');
+      if (rawArgs) {
+        try {
+          const parsed = JSON.parse(rawArgs);
+          // Only read if it's recent (e.g., within the last 5 minutes) to avoid stale triggers
+          if (Date.now() - parsed.timestamp < 300000) {
+            setIntelConstraint(parsed.txt);
+          }
+        } catch (e) { console.error('Failed to parse injected intel', e) }
+        localStorage.removeItem('avocado_intel_override');
+      }
+    };
+    checkIntel();
+    window.addEventListener('storage', checkIntel);
+    window.addEventListener('avocado_intel_update', checkIntel);
+    return () => {
+      window.removeEventListener('storage', checkIntel);
+      window.removeEventListener('avocado_intel_update', checkIntel);
+    };
+  }, []);
+
+  const isMounted = useRef(true);
+  useEffect(() => {
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
+  const [videoDuration, setVideoDuration] = useState('auto');
+  const [sceneCount, setSceneCount] = useState('auto');
+  const [userPrompt, setUserPrompt] = useState('');
+
+  // Persistence
+  useEffect(() => {
+    localStorage.setItem('sop_output_mode', outputMode);
+    localStorage.setItem('sop_engine_provider', engineProvider);
+    localStorage.setItem('sop_engine_model', engineModel);
+  }, [outputMode, engineProvider, engineModel]);
+
+  // Metadata & Providers
+  useEffect(() => {
+    axios.get(`${API_BASE}/api/insights/metadata`).then(res => {
+      setMetadata(res.data);
+      setRegionId(prev => prev || (res.data.regions.length > 0 ? res.data.regions[0].id : ''));
+      setPlatformId(prev => prev || (res.data.platforms.length > 0 ? res.data.platforms[0].id : ''));
+      setAngleId(prev => prev || (res.data.angles.length > 0 ? res.data.angles[0].id : ''));
+    }).catch(err => console.error("Metadata fetch failed", err));
+  }, []);
+
+  useEffect(() => {
+    setGeneratorShell(isSynthesizing, isSynthesizing ? t('lab.synthesis_status') : '');
+  }, [isSynthesizing, setGeneratorShell, t]);
+
+  const modeOptions = useMemo(() => [
+    { value: 'auto', label: t('lab.mode_auto', 'Auto (AI 接管)') },
+    { value: 'draft', label: t('lab.mode_draft', '15s极速') },
+    { value: 'director', label: t('lab.mode_director', '30s标准') },
+  ], [t]);
+
+  const durationOptions = useMemo(() => [
+    { value: 'auto', label: t('lab.duration_auto', '自动分配') },
+    { value: '15s', label: t('lab.duration_15s', '15秒极速') },
+    { value: '30s', label: t('lab.duration_30s', '30秒标准') },
+    { value: '60s', label: t('lab.duration_60s', '60秒深度') },
+  ], [t]);
+
+  const sceneCountOptions = useMemo(() => [
+    { value: 'auto', label: t('lab.scenes_auto', '自动推算') },
+    { value: '3-5', label: t('lab.scenes_short', '3-5个分镜') },
+    { value: '5-8', label: t('lab.scenes_medium', '5-8个分镜') },
+    { value: '8-12', label: t('lab.scenes_long', '8-12个分镜') },
+  ], [t]);
+
+  const handleSynthesize = async () => {
+    if (!currentProject) return;
+    setIsSynthesizing(true);
+    setSynthesisResult(null);
+    try {
+      const payloadBase: any = {
+        project_id: currentProject.id,
+        region_id: regionId,
+        platform_id: platformId,
+        angle_id: angleId,
+        engine: "cloud",
+        output_mode: outputMode,
+        compliance_suggest: complianceSuggest,
+      };
+      if (videoDuration !== 'auto') payloadBase.video_duration = videoDuration;
+      if (sceneCount !== 'auto') payloadBase.scene_count = sceneCount;
+      if (intelConstraint) payloadBase.intel_constraint = intelConstraint;
+      if (userPrompt.trim()) payloadBase.intel_constraint = (payloadBase.intel_constraint ? payloadBase.intel_constraint + "\n" : "") + userPrompt.trim();
+      if (engineProvider) payloadBase.engine_provider = engineProvider;
+      if (engineModel) payloadBase.engine_model = engineModel;
+
+      const targetMode = synthesisMode;
+      const response = await axios.post(`${API_BASE}/api/generate`, { ...payloadBase, mode: targetMode });
+      
+      if (!isMounted.current) return;
+      setSynthesisResult(response.data);
+      
+      if (response.data?.generation_metrics?.failover_notice) {
+        setInfoToast({
+          message: `${t('lab.failover_notice', '当前线路拥堵，已自动切换至备用引擎')} ${response.data.generation_metrics.failover_notice} ${t('lab.continue_generation', '继续生成...')}`,
+          isFailover: true
+        });
+      }
+      
+      setDashboardOpen(true);
+    } catch (e: any) {
+      if (!isMounted.current) return;
+      let msg = t('lab.errors.synthesis_failed') as string;
+      if (e.response?.data?.detail) {
+        if (typeof e.response.data.detail === 'string') {
+          msg = e.response.data.detail;
+        } else if (e.response.data.detail?.error_code) {
+          msg = `[${e.response.data.detail.error_code}] ${e.response.data.detail.error_message || ''}`;
+        }
+      }
+      setErrorToast(msg);
+    } finally { 
+      if (isMounted.current) setIsSynthesizing(false); 
+    }
+  };
+
+  const handleSelectDraft = async (draft: any) => {
+    if (!currentProject) return;
+    setIsSynthesizing(true);
+    try {
+      const payloadBase: any = {
+        project_id: currentProject.id,
+        region_id: regionId,
+        platform_id: platformId,
+        angle_id: angleId,
+        engine: "cloud",
+        output_mode: outputMode,
+        compliance_suggest: complianceSuggest,
+        mode: "director",
+        selected_draft_payload: draft,
+      };
+      if (videoDuration !== 'auto') payloadBase.video_duration = videoDuration;
+      if (sceneCount !== 'auto') payloadBase.scene_count = sceneCount;
+      if (intelConstraint) payloadBase.intel_constraint = intelConstraint;
+      if (userPrompt.trim()) payloadBase.intel_constraint = (payloadBase.intel_constraint ? payloadBase.intel_constraint + "\n" : "") + userPrompt.trim();
+        if (engineProvider) payloadBase.engine_provider = engineProvider;
+        if (engineModel) payloadBase.engine_model = engineModel;
+        const response = await axios.post(`${API_BASE}/api/generate`, payloadBase);
+        
+        if (!isMounted.current) return;
+        setSynthesisResult(response.data);
+        
+        if (response.data?.generation_metrics?.failover_notice) {
+          setInfoToast({
+            message: `${t('lab.failover_notice', '当前线路拥堵，已自动切换至备用引擎')} ${response.data.generation_metrics.failover_notice} ${t('lab.continue_generation', '继续生成...')}`,
+            isFailover: true
+          });
+        }
+      } catch (e: any) {
+      if (!isMounted.current) return;
+      setErrorToast('Failed to generate final script from draft.');
+    } finally {
+      if (isMounted.current) setIsSynthesizing(false);
+    }
+  };
+
+  const buildCurrentPayload = useCallback((): QueueJobPayload | null => {
+    if (!currentProject) return null;
+    const overrides: any = {};
+    if (engineProvider) overrides.engine_provider = engineProvider;
+    if (engineModel) overrides.engine_model = engineModel;
+    if (intelConstraint) overrides.intel_constraint = intelConstraint;
+    if (userPrompt.trim()) overrides.intel_constraint = (overrides.intel_constraint ? overrides.intel_constraint + "\n" : "") + userPrompt.trim();
+    if (videoDuration !== 'auto') overrides.video_duration = videoDuration;
+    if (sceneCount !== 'auto') overrides.scene_count = sceneCount;
+    return { kind: 'full_sop', project_id: currentProject.id, region_id: regionId, platform_id: platformId, angle_id: angleId, engine: 'cloud', output_mode: outputMode, compliance_suggest: complianceSuggest, mode: synthesisMode, ...overrides };
+  }, [currentProject, regionId, platformId, angleId, outputMode, complianceSuggest, synthesisMode, engineProvider, engineModel, intelConstraint, userPrompt, videoDuration, sceneCount]);
+
+  const labQueue = useLabQueue('script');
+
+  const isQuickCopyResult = useMemo(() => synthesisResult && synthesisResult.ad_copy_matrix && !Array.isArray(synthesisResult.script), [synthesisResult]);
+
+  const isDnaMatched = useMemo(() => {
+    if (!currentProject || !regionId || !platformId || !metadata.regions || !metadata.platforms) return false;
+    const regionName = metadata.regions.find((r: any) => r.id === regionId)?.name;
+    const platformName = metadata.platforms.find((p: any) => p.id === platformId)?.name;
+    if (!regionName || !platformName) return false;
+    return currentProject.market_targets?.some(t => t.region === regionName && t.platform === platformName) || false;
+  }, [currentProject, regionId, platformId, metadata]);
+
+  // Estimate fetcher
+  useEffect(() => {
+    if (!regionId) return;
+    const payload = buildCurrentPayload();
+    if (!payload) return;
+    const abortController = new AbortController();
+    const handle = window.setTimeout(() => {
+      axios.post(`${API_BASE}/api/estimate`, payload, { signal: abortController.signal }).catch((err) => {
+        if (!axios.isCancel(err)) console.error(err);
+      });
+    }, 500);
+    return () => {
+      window.clearTimeout(handle);
+      abortController.abort();
+    };
+  }, [buildCurrentPayload, regionId]);
+
+  // Context Preview Fetcher
+  useEffect(() => {
+    if (!regionId || !platformId || !angleId) return;
+    setIsPreviewLoading(true);
+    setContextPreviewError(null);
+    const abortController = new AbortController();
+    axios.post(`${API_BASE}/api/context-preview`, {
+      region_id: regionId,
+      platform_id: platformId,
+      angle_id: angleId,
+      game_info: currentProject?.game_info || null
+    }, { signal: abortController.signal }).then(res => {
+      setContextPreview(res.data);
+      setIsPreviewLoading(false);
+    }).catch(err => {
+      if (!axios.isCancel(err)) {
+        console.error("Context preview fetch failed", err);
+        setContextPreviewError(err.message || 'Failed to sync Oracle Intel');
+        setIsPreviewLoading(false);
+      }
+    });
+    return () => abortController.abort();
+  }, [regionId, platformId, angleId, previewRetry, currentProject]);
 
   return (
-    <div className="w-full h-full flex flex-col bg-background text-on-background relative overflow-x-hidden page-pad">
-      {/* Sleek Light/Ambient Gradients */}
+    <div className="w-full h-full flex flex-col bg-background text-on-background overflow-hidden relative">
+      {/* Dynamic Radar-like Background */}
       <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] bg-primary/5 rounded-full blur-[100px] pointer-events-none -z-10" />
       <div className="absolute bottom-[-10%] right-[-10%] w-[40vw] h-[40vw] bg-secondary/5 rounded-full blur-[100px] pointer-events-none -z-10" />
+      <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_60%_at_50%_50%,#000_10%,transparent_100%)] pointer-events-none -z-10" />
+
+      <AnimatePresence>
+        {errorToast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="absolute top-6 left-1/2 -translate-x-1/2 z-50 bg-red-500/90 backdrop-blur-md text-white px-6 py-3 rounded-2xl shadow-xl flex items-center gap-3 max-w-[80vw]"
+          >
+            <Activity className="w-5 h-5 shrink-0" />
+            <span className="text-[13px] font-medium">{errorToast}</span>
+            <button onClick={() => setErrorToast(null)} className="ml-2 hover:bg-white/20 p-1 rounded-full transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {infoToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className={`fixed bottom-8 right-8 z-[200] ${infoToast.isFailover ? 'bg-amber-500/90 border-amber-400/50' : 'bg-primary/90 border-primary/50'} backdrop-blur-md text-white px-6 py-3 rounded-2xl shadow-xl flex items-center gap-3 border`}
+          >
+            {infoToast.isFailover ? <AlertTriangle className="w-5 h-5" /> : <ShieldCheck className="w-5 h-5" />}
+            <span className="text-[13px] font-medium">{infoToast.message}</span>
+            <button onClick={() => setInfoToast(null)} className="ml-2 hover:bg-white/20 p-1 rounded-full transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <ResultDashboardView
         open={dashboardOpen}
@@ -450,992 +403,515 @@ export const Lab: React.FC = () => {
         onResultUpdate={(next) => setSynthesisResult(next)}
       />
 
-      <div className="max-w-[1600px] w-full mx-auto h-full flex flex-col min-h-0 card-base shadow-sm border border-outline-variant/30 p-6 lg:p-8 relative z-10">
-        
-        {/* Header Block */}
-        <motion.header
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4 }}
-          className="flex items-start justify-between shrink-0 mb-6 border-b border-outline-variant/30 pb-6"
-        >
-          <div className="flex items-center gap-5">
-             <div className="w-14 h-14 bg-gradient-to-br from-surface-container-lowest to-surface-container rounded-2xl flex items-center justify-center border border-outline-variant/40 shadow-sm shrink-0">
-               <Beaker className="w-7 h-7 text-primary" />
-             </div>
-             
-             <div>
-               <div className="flex items-center gap-2 text-primary font-bold text-[11px] uppercase tracking-[0.2em] mb-1 opacity-90">
-                 <Layers className="w-3.5 h-3.5" /> {t('lab.pipeline_title')}
-               </div>
-               <h1 className="text-3xl lg:text-[2rem] font-black tracking-tight text-on-surface leading-tight">
-                 {t('lab.title')}
-               </h1>
-             </div>
-          </div>
-        </motion.header>
+      <header className="shrink-0 border-b border-outline-variant/20 bg-surface-container-lowest/80 backdrop-blur-xl px-6 py-4 relative z-20 shadow-sm">
+        <LabHeader
+          title={t('lab.title')}
+          pipelineTitle={t('lab.pipeline_title')}
+          outputMode={outputMode}
+          setOutputMode={setOutputMode}
+          engineProvider={engineProvider}
+          setEngineProvider={setEngineProvider}
+          engineModel={engineModel}
+          setEngineModel={setEngineModel}
+          onNoKeyConfigured={setNoKeyConfigured}
+          onLowComplianceWarning={setProviderWarning}
+        />
+      </header>
 
-        {/* 1-2-1 Flow Architecture */}
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-6 relative overflow-x-hidden">
-           
-           {/* Column 1: Source */}
-           <div className="w-full lg:w-[280px] xl:w-[320px] shrink-0 flex flex-col min-h-0 lg:border-r border-outline-variant/30 lg:pr-6">
-             <div className="flex items-center justify-between pb-3 shrink-0">
-               <span className="text-[11px] uppercase font-bold tracking-[0.1em] text-on-surface-variant flex items-center gap-1.5">
-                  <Database className="w-3.5 h-3.5" /> {t('lab.slot_a.header')}
-               </span>
-               {currentProject?.name ? (
-                 <span
-                   className="text-[10px] font-black text-on-surface-variant/80 truncate max-w-[55%] text-right"
-                   title={currentProject.name}
-                 >
-                   {currentProject.name}
-                 </span>
-               ) : null}
-             </div>
-             
-             <div
-               className="flex-1 min-h-0 flex flex-col gap-4 overflow-y-auto custom-scrollbar pb-4 pr-1"
-               style={{ scrollbarGutter: 'stable' }}
-             >
-               {/* Project Card */}
-               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-surface-container-low border border-outline-variant/40 rounded-2xl p-5 relative overflow-hidden shadow-sm">
-                 <div className="absolute top-0 right-0 w-24 h-24 bg-primary/5 rounded-full blur-2xl -z-10" />
-                 <div className="text-[10px] uppercase font-bold tracking-widest text-on-surface-variant flex items-center gap-1.5 mb-3">
-                    <Lock className="w-3 h-3 text-secondary"/> {t('lab.slot_a.title')}
-                 </div>
-                 <div className="text-lg font-black text-on-surface leading-tight break-words mb-3">
-                   {currentProject?.name || t('lab.empty.select_project')}
-                 </div>
-                 <div className="text-[9px] font-mono text-on-surface-variant bg-surface-container-high px-2 py-1 rounded inline-block border border-outline-variant/30">
-                   ID: {currentProject?.id || 'null'}
-                 </div>
-               </motion.div>
-
-               {/* Gameplay Data */}
-               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="flex flex-col flex-1">
-                  <div className="text-[10px] uppercase font-bold tracking-widest text-on-surface-variant mb-2 px-1">
-                     {t('lab.slot_a.base_params')}
-                  </div>
-                  <div className="flex-1 bg-surface-container-lowest border border-outline-variant/40 rounded-2xl p-3 text-[12px] text-on-surface/80 overflow-y-auto custom-scrollbar shadow-inner leading-relaxed">
-                     {currentProject?.game_info ? (
-                        <div className="space-y-3">
-                          <details className="rounded-xl border border-outline-variant/25 bg-surface-container-high/70 px-3 py-2">
-                            <summary className="cursor-pointer select-none flex items-center justify-between gap-2 list-none [&::-webkit-details-marker]:hidden">
-                              <span className="font-bold text-primary text-[10px] uppercase tracking-wider">{t('lab.slot_a.core_gameplay')}</span>
-                              <span className="text-[10px] text-on-surface-variant">{t('lab.slot_a.expand')}</span>
-                            </summary>
-                            <div className="pt-2 text-[12px] text-on-surface/80 leading-relaxed whitespace-pre-wrap">
-                              {currentProject.game_info.core_gameplay}
-                            </div>
-                          </details>
-
-                          <details className="rounded-xl border border-outline-variant/25 bg-surface-container-high/70 px-3 py-2">
-                            <summary className="cursor-pointer select-none flex items-center justify-between gap-2 list-none [&::-webkit-details-marker]:hidden">
-                              <span className="font-bold text-secondary text-[10px] uppercase tracking-wider">{t('lab.slot_a.usp_extracted')}</span>
-                              <span className="text-[10px] text-on-surface-variant">{t('lab.slot_a.expand')}</span>
-                            </summary>
-                            <div className="pt-2 text-[12px] text-on-surface/80 leading-relaxed whitespace-pre-wrap">
-                              {currentProject.game_info.core_usp}
-                            </div>
-                          </details>
-                        </div>
-                     ) : (
-                        <div className="flex flex-col items-center justify-center h-full text-on-surface-variant opacity-50 space-y-2">
-                           <Info className="w-6 h-6" />
-                           <span>{t('lab.empty.select_project')}</span>
-                        </div>
-                     )}
-                  </div>
-               </motion.div>
-             </div>
-           </div>
-
-           {/* Column 2: Mixing Console */}
-           <div className="flex-1 min-w-0 shrink flex flex-col min-h-0 relative z-10 pb-4">
-             <div className="flex items-center justify-between pb-3 shrink-0">
-               <span className="text-[11px] uppercase font-bold tracking-[0.1em] text-on-surface-variant flex items-center gap-1.5">
-                  <Network className="w-3.5 h-3.5 text-primary" /> {t('lab.mixing_console')}
-               </span>
-               <span className="text-[9px] font-bold tracking-[0.1em] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  {t('lab.db_synced')}
-               </span>
-             </div>
-
-             <div className="flex-1 overflow-visible w-full max-w-[720px] mx-auto relative pb-2 px-1">
-               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                 {/* OUTPUT TYPE (spans) */}
-                 <div className="sm:col-span-2 w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-3 shadow-sm hover:shadow-md transition-shadow relative flex flex-col">
-                   <div className="flex items-center gap-2 mb-2">
-                     <div className="w-5 h-5 rounded-md bg-secondary/10 flex items-center justify-center shrink-0">
-                       <BrainCircuit className="w-3 h-3 text-secondary" />
-                     </div>
-                     <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.console.output_type')}</div>
-                   </div>
-                   <div className="flex items-center gap-2">
-                     <button
-                       type="button"
-                       onClick={() => setOutputType('full_sop')}
-                       className={`flex-1 rounded-lg px-2.5 py-2 text-[11px] font-bold border transition-colors ${
-                         outputType === 'full_sop'
-                           ? 'bg-primary text-on-primary border-primary'
-                           : 'bg-surface-container-high text-on-surface border-outline-variant/35 hover:border-primary/30'
-                       }`}
-                     >
-                       {t('lab.console.full_sop')}
-                     </button>
-                     <button
-                       type="button"
-                       onClick={() => setOutputType('quick_copy')}
-                       className={`flex-1 rounded-lg px-2.5 py-2 text-[11px] font-bold border transition-colors ${
-                         outputType === 'quick_copy'
-                           ? 'bg-secondary text-on-primary border-secondary'
-                           : 'bg-surface-container-high text-on-surface border-outline-variant/35 hover:border-secondary/30'
-                       }`}
-                     >
-                       {t('lab.console.quick_copy')}
-                     </button>
-                   </div>
-                 </div>
-
-                 {/* Region */}
-                 <div className="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-2 shadow-sm hover:shadow-md transition-shadow relative flex flex-col">
-                   <div className="flex items-center gap-2 mb-1.5">
-                     <div className="w-5 h-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
-                       <Globe className="w-3 h-3 text-primary" />
-                     </div>
-                     <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.slot_b.label')}</div>
-                   </div>
-                   {regionId && <ProSelect value={regionId} onChange={setRegionId} options={toOptions(metadata.regions)} />}
-                 </div>
-
-                 {/* Platform */}
-                 <div className="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-2 shadow-sm hover:shadow-md transition-shadow relative flex flex-col">
-                   <div className="flex items-center gap-2 mb-1.5">
-                     <div className="w-5 h-5 rounded-md bg-secondary/10 flex items-center justify-center shrink-0">
-                       <MonitorPlay className="w-3 h-3 text-secondary" />
-                     </div>
-                     <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.slot_c.label')}</div>
-                   </div>
-                   {platformId && <ProSelect value={platformId} onChange={setPlatformId} options={toOptions(metadata.platforms)} />}
-                 </div>
-
-                 {/* Angle */}
-                 <div className="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-2 shadow-sm hover:shadow-md transition-shadow relative flex flex-col">
-                   <div className="flex items-center gap-2 mb-1.5">
-                     <div className="w-5 h-5 rounded-md bg-emerald-50 flex items-center justify-center shrink-0">
-                       <Target className="w-3 h-3 text-emerald-600" />
-                     </div>
-                     <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.slot_d.label')}</div>
-                   </div>
-                   {angleId && <ProSelect value={angleId} onChange={setAngleId} options={toOptions(metadata.angles)} dropUp={true} />}
-                 </div>
-
-                 {/* Output Language */}
-                 <div className="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-2 shadow-sm hover:shadow-md transition-shadow relative flex flex-col">
-                   <div className="flex items-center gap-2 mb-1.5">
-                     <div className="w-5 h-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
-                       <Globe className="w-3 h-3 text-primary" />
-                     </div>
-                     <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.output_mode.label')}</div>
-                   </div>
-                   <ProSelect
-                     value={outputMode}
-                     onChange={(v) => setOutputMode((v === 'en' ? 'en' : 'cn'))}
-                     options={outputModeOptions}
-                     dropUp={true}
-                   />
-                 </div>
-
-                {/* Phase 25 / D3 — Engine Selector (provider → model) */}
-                <div className="sm:col-span-2 w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-3 shadow-sm hover:shadow-md transition-shadow relative">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-5 h-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
-                      <BrainCircuit className="w-3 h-3 text-primary" />
-                    </div>
-                    <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.console.engine.label')}</div>
-                    {(() => {
-                      const pid = engineProvider || defaultProviderId;
-                      const spec = providersCatalog.find((p: any) => p.id === pid);
-                      if (!spec) return null;
-                      return (
-                        <span
-                          className={`ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
-                            spec.available
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              : 'bg-amber-50 text-amber-700 border-amber-200'
-                          }`}
-                          title={spec.available ? t('lab.console.engine.available') : t('lab.console.engine.fallback_hint')}
-                        >
-                          {spec.available ? 'READY' : 'FALLBACK'}
-                        </span>
-                      );
-                    })()}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <div className="text-[9px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.console.engine.provider')}</div>
-                      <ProSelect
-                        value={engineProvider || defaultProviderId}
-                        onChange={(v) => {
-                          setEngineProvider(String(v || ''));
-                          setEngineModel('');
-                        }}
-                        options={providersCatalog.map((p: any) => ({
-                          value: String(p.id),
-                          label: `${p.label}${p.available ? '' : ' · ' + t('lab.console.engine.no_key')}`,
-                        }))}
-                        dropUp={true}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-[9px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.console.engine.model')}</div>
-                      {(() => {
-                        const pid = engineProvider || defaultProviderId;
-                        const spec = providersCatalog.find((p: any) => p.id === pid);
-                        const choices: string[] = Array.isArray(spec?.model_choices) ? spec.model_choices : [];
-                        const options = [
-                          { value: '', label: t('lab.console.engine.default_model', { model: spec?.default_model || '' }) },
-                          ...choices.map((m: string) => ({ value: m, label: m })),
-                        ];
-                        return (
-                          <ProSelect
-                            value={engineModel}
-                            onChange={(v) => setEngineModel(String(v || ''))}
-                            options={options}
-                            dropUp={true}
-                          />
-                        );
-                      })()}
-                    </div>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-on-surface-variant">
-                    <span>{t('lab.console.engine.hint')}</span>
-                    <Link
-                      to="/settings/providers"
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-outline-variant/60 hover:bg-surface-container text-[10px] font-semibold text-on-surface"
-                    >
-                      {t('lab.console.engine.manage')}
-                    </Link>
-                  </div>
-                </div>
-
-                {/* Compliance Suggest */}
-                <div className="sm:col-span-2 w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-3 shadow-sm hover:shadow-md transition-shadow relative flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.console.compliance_suggest')}</div>
-                    <div className="text-[10px] text-on-surface-variant mt-1">{t('lab.console.compliance_suggest_hint')}</div>
-                  </div>
-                  <label className="shrink-0 inline-flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={complianceSuggest}
-                      onChange={(e) => setComplianceSuggest(e.target.checked)}
-                      className="sr-only"
-                    />
-                    <span
-                      className={`w-11 h-6 rounded-full border transition-colors relative ${
-                        complianceSuggest ? 'bg-secondary border-secondary/40' : 'bg-surface-container-high border-outline-variant/40'
-                      }`}
-                      aria-hidden
-                    >
-                      <span
-                        className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-surface shadow-sm transition-transform ${
-                          complianceSuggest ? 'translate-x-5' : ''
-                        }`}
-                      />
-                    </span>
-                    <span className="text-[10px] font-bold text-on-surface-variant">{complianceSuggest ? 'ON' : 'OFF'}</span>
-                  </label>
-                </div>
-
-                 {/* Full SOP: Gen Mode */}
-                 {outputType === 'full_sop' ? (
-                   <div className="sm:col-span-2 w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-2 shadow-sm hover:shadow-md transition-shadow relative flex flex-col">
-                     <div className="flex items-center gap-2 mb-1.5">
-                       <div className="w-5 h-5 rounded-md bg-secondary/10 flex items-center justify-center shrink-0">
-                         <BrainCircuit className="w-3 h-3 text-secondary" />
-                       </div>
-                       <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.console.gen_mode')}</div>
-                     </div>
-                     <ProSelect
-                       value={synthesisMode}
-                       onChange={(v) => setSynthesisMode((v === 'draft' || v === 'director') ? v : 'auto')}
-                       options={synthesisModeOptions}
-                       dropUp={true}
-                     />
-                   </div>
-                 ) : (
-                   <details className="sm:col-span-2 w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-3 shadow-sm hover:shadow-md transition-shadow">
-                     <summary className="cursor-pointer select-none list-none flex items-center justify-between">
-                       <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.console.quick_copy_config')}</div>
-                       <div className="text-[10px] font-mono text-on-surface-variant">{t('lab.console.expand')}</div>
-                     </summary>
-                     <div className="pt-3 space-y-3">
-                       <div className="space-y-2">
-                         <div className="flex items-center justify-between text-[11px] font-semibold text-on-surface">
-                           <span>{t('lab.console.regions_multi')}</span>
-                           <span className="font-mono text-secondary">{copyRegionIds.length || 0}</span>
-                         </div>
-                         <div className="flex flex-wrap gap-2 max-h-[92px] overflow-y-auto custom-scrollbar pr-1">
-                           {(metadata.regions || []).map((r: any) => {
-                             const id = String(r?.id || '');
-                             const label = String(r?.short_name || r?.name || id);
-                             const checked = copyRegionIds.includes(id);
-                             return (
-                               <button
-                                 key={id}
-                                 type="button"
-                                 onClick={() => {
-                                   if (!id) return;
-                                   setCopyRegionIds((prev) => checked ? prev.filter((x) => x !== id) : [...prev, id]);
-                                 }}
-                                 className={`rounded-full px-2.5 py-1 text-[10px] font-bold border transition-colors ${
-                                   checked
-                                     ? 'bg-secondary/15 text-secondary border-secondary/30'
-                                     : 'bg-surface-container-high text-on-surface-variant border-outline-variant/35 hover:border-secondary/30'
-                                 }`}
-                                 title={String(r?.name || id)}
-                               >
-                                 {label}
-                               </button>
-                             );
-                           })}
-                         </div>
-                         <div className="text-[10px] text-on-surface-variant">{t('lab.console.empty_region_hint')}</div>
-                       </div>
-
-                       <div className="space-y-1">
-                         <div className="flex items-center justify-between text-[11px] font-semibold text-on-surface">
-                           <span>{t('lab.console.quantity_headlines')}</span>
-                           <span className="font-mono text-secondary">{copyQuantity}</span>
-                         </div>
-                         <input
-                           type="range"
-                           min={10}
-                           max={100}
-                           step={10}
-                           value={copyQuantity}
-                           onChange={(e) => setCopyQuantity(Number(e.target.value))}
-                           className="w-full accent-secondary"
-                         />
-                         <div className="text-[10px] text-on-surface-variant">10 / 20 / 50</div>
-                       </div>
-
-                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                         <div className="space-y-2">
-                           <div className="text-[11px] font-semibold text-on-surface">{t('lab.console.tone')}</div>
-                           <div className="grid grid-cols-2 gap-2">
-                             {copyToneOptions.map((opt) => {
-                               const checked = copyTones.includes(opt.id);
-                               return (
-                                 <button
-                                   key={opt.id}
-                                   type="button"
-                                   onClick={() => {
-                                     setCopyTones((prev) => checked ? prev.filter((x) => x !== opt.id) : [...prev, opt.id]);
-                                   }}
-                                   className={`rounded-lg px-2 py-1.5 text-[11px] font-bold border transition-colors ${
-                                     checked
-                                       ? 'bg-secondary/15 text-secondary border-secondary/30'
-                                       : 'bg-surface-container-high text-on-surface border-outline-variant/35 hover:border-secondary/30'
-                                   }`}
-                                 >
-                                   {opt.label}
-                                 </button>
-                               );
-                             })}
-                           </div>
-                         </div>
-                         <div className="space-y-2">
-                           <div className="text-[11px] font-semibold text-on-surface">{t('lab.console.localization')}</div>
-                           <div className="flex flex-wrap gap-2">
-                             {copyLocaleOptions.map((opt) => {
-                               const checked = copyLocales.includes(opt.id);
-                               return (
-                                 <button
-                                   key={opt.id}
-                                   type="button"
-                                   onClick={() => {
-                                     setCopyLocales((prev) => checked ? prev.filter((x) => x !== opt.id) : [...prev, opt.id]);
-                                   }}
-                                   className={`rounded-full px-2.5 py-1 text-[10px] font-bold border transition-colors ${
-                                     checked
-                                       ? 'bg-primary/15 text-primary border-primary/30'
-                                       : 'bg-surface-container-high text-on-surface-variant border-outline-variant/35 hover:border-primary/30'
-                                   }`}
-                                 >
-                                   {opt.label}
-                                 </button>
-                               );
-                             })}
-                           </div>
-                           <div className="text-[10px] text-on-surface-variant">{t('lab.console.empty_locale_hint')}</div>
-                         </div>
-                       </div>
-
-                       <div className="space-y-2 pt-1">
-                         <div className="text-[11px] font-semibold text-on-surface">{t('lab.console.copy_refresher')}</div>
-                         <input
-                           value={baseScriptId}
-                           onChange={(e) => setBaseScriptId(e.target.value)}
-                           placeholder={t('lab.console.base_script_placeholder')}
-                           className="w-full bg-surface-container-high text-[11px] text-on-surface px-3 py-2 rounded-lg border border-outline-variant/35 focus:outline-none focus:border-secondary/50 focus:ring-1 focus:ring-secondary/30 placeholder:text-on-surface-variant/50 font-mono"
-                         />
-                         <button
-                           type="button"
-                           onClick={handleRefreshCopy}
-                           disabled={isSynthesizing || !currentProject || !baseScriptId.trim()}
-                           className={`btn-director-secondary w-full py-2 text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 ${isSynthesizing ? 'opacity-70 cursor-wait' : ''}`}
-                         >
-                           <RefreshCw className={`w-4 h-4 ${isSynthesizing ? 'animate-spin' : ''}`} />
-                           {t('lab.console.refresh_copy_btn')}
-                         </button>
-                         <div className="text-[10px] text-on-surface-variant">{t('lab.console.refresh_copy_hint')}</div>
-                       </div>
-                     </div>
-                   </details>
-                 )}
-
-                {/* Generate */}
-                <div className="sm:col-span-2 w-full shrink-0 pt-1 space-y-2">
-                  {estimate && (
-                    <div
-                      className={`flex items-center justify-between gap-2 text-[10px] font-semibold px-3 py-2 rounded-lg border ${
-                        estimate.budget?.warn_level === 'block'
-                          ? 'bg-error/10 text-error border-error/40'
-                          : estimate.budget?.warn_level === 'critical'
-                          ? 'bg-amber-50 text-amber-700 border-amber-300'
-                          : estimate.budget?.warn_level === 'warn'
-                          ? 'bg-amber-50/60 text-amber-700 border-amber-200'
-                          : 'bg-surface-container-high text-on-surface-variant border-outline-variant/40'
-                      }`}
-                      aria-live="polite"
-                      title={t('lab.estimate.title') || 'Estimated cost'}
-                    >
-                      <div className="flex items-center gap-2">
-                        <Activity className={`w-3 h-3 ${estimateLoading ? 'animate-pulse' : ''}`} />
-                        <span>
-                          {t('lab.estimate.label') || 'Estimate'}: ~
-                          {Number(estimate.total_tokens || 0).toLocaleString()} tok · ¥
-                          {Number(estimate.price_cny || 0).toFixed(3)}
-                        </span>
-                      </div>
-                      <span>
-                        {t('lab.estimate.remaining') || 'Remaining'}:{' '}
-                        {Number(estimate.budget?.projected_remaining_after || 0).toLocaleString()} /{' '}
-                        {Number(estimate.budget?.tokens_budget_today || 0).toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-                  <motion.button
-                    whileHover={!(isSynthesizing || !currentProject || !regionId) ? { scale: 1.02 } : {}}
-                    whileTap={!(isSynthesizing || !currentProject || !regionId) ? { scale: 0.98 } : {}}
-                    onClick={() => {
-                      const warn = estimate?.budget?.warn_level;
-                      if (warn === 'critical' || warn === 'block') {
-                        const msg =
-                          t('lab.estimate.confirm_over_budget') ||
-                          'Daily token budget is almost depleted. Generate anyway?';
-                        if (!window.confirm(msg)) return;
-                      }
-                      handleSynthesize();
-                    }}
-                    disabled={isSynthesizing || !currentProject || !regionId}
-                    className={`btn-director-primary w-full py-3 text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2 shadow-md ${
-                      isSynthesizing ? 'opacity-70 cursor-wait' : ''
-                    } ${
-                      estimate?.budget?.warn_level === 'critical' || estimate?.budget?.warn_level === 'block'
-                        ? '!bg-amber-500 hover:!bg-amber-600 !text-white'
-                        : ''
-                    }`}
+      <div className="flex-1 min-h-0 w-full max-w-[1920px] mx-auto p-4 lg:p-6 flex flex-col lg:flex-row gap-6 relative z-10">
+        {/* Console Column */}
+        {/* Console Column */}
+        <div className="flex-1 min-w-0 shrink flex flex-col min-h-0 relative bg-white border border-[#e8ecea] rounded-2xl shadow-sm overflow-hidden z-20">
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+            <div className="p-6 flex flex-col gap-6">
+              <AnimatePresence>
+                {providerWarning && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                    animate={{ opacity: 1, height: 'auto', marginBottom: 24 }}
+                    exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                    className="overflow-hidden"
                   >
-                    {isSynthesizing ? (
-                      <><RefreshCw className="w-4 h-4 animate-spin" /> SYNTHESIZING...</>
-                    ) : (
-                      <><Play className="w-4 h-4" /> {t('nav.initiate')}</>
-                    )}
-                  </motion.button>
+                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-start gap-3">
+                      <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                      <div className="text-[12px] text-amber-600 dark:text-amber-400 font-medium leading-relaxed">
+                        {providerWarning}
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+                {intelConstraint && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                    animate={{ opacity: 1, height: 'auto', marginBottom: 16 }}
+                    exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                    className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 relative z-10 flex items-start gap-4 shadow-sm"
+                  >
+                    <div className="text-amber-500 mt-0.5">💡</div>
+                    <div className="flex-1">
+                      <h4 className="text-[11px] font-bold text-amber-500 uppercase tracking-widest mb-1.5 flex items-center gap-2">
+                        {t('lab.oracle_override', 'Oracle Override Active')}
+                        <span className="bg-amber-500/20 px-1.5 py-0.5 rounded text-[8px] font-mono border border-amber-500/20">{t('lab.actionable_directive', 'Actionable Directive')}</span>
+                      </h4>
+                      <p className="text-[11px] text-amber-600/80 dark:text-amber-300/80 leading-relaxed font-medium line-clamp-3">
+                        {intelConstraint}
+                      </p>
+                    </div>
+                    <button onClick={() => setIntelConstraint('')} className="p-1.5 hover:bg-amber-500/20 text-amber-600 rounded-md transition-colors border border-transparent hover:border-amber-500/30" title={t('lab.remove_constraint', 'Remove constraint')}>
+                      <X className="w-3.5 h-3.5 opacity-70" />
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              
+              <div className="w-full flex flex-col gap-6 relative">
+                <div className="flex items-center gap-2 pb-2 border-b border-[#e8ecea]">
+                  <span className="text-[12px] font-bold tracking-widest text-[#1a5d3f] flex items-center gap-1.5">
+                    <Settings className="w-4 h-4 text-[#3aa668]" /> {t('lab.script_config', '脚本策略配置')}
+                  </span>
+                </div>
 
-                  {/* B3 — Presets + Queue row */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setPresetsOpen((v) => !v)}
-                      className="btn-director-ghost text-[10px] font-bold uppercase tracking-widest py-1.5 flex items-center justify-center gap-1.5"
-                      title={t('lab.presets.title') || 'Presets'}
-                    >
-                      <Save className="w-3.5 h-3.5" /> {t('lab.presets.label') || 'Presets'} ({labQueue.presets.length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setQueueOpen((v) => !v)}
-                      className="btn-director-ghost text-[10px] font-bold uppercase tracking-widest py-1.5 flex items-center justify-center gap-1.5"
-                      title={t('lab.queue.title') || 'Queue'}
-                    >
-                      <ListChecks className="w-3.5 h-3.5" /> {t('lab.queue.label') || 'Queue'} ({labQueue.queue.length})
-                    </button>
+                <div className="flex flex-col gap-5">
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    <div className="flex flex-col gap-3 p-4 bg-[#f8faf9] border border-[#e8ecea] rounded-[12px] hover:border-[#3aa668]/30 transition-colors group">
+                      <div className="flex items-center gap-2 text-[11px] font-bold text-[#6b7571] uppercase tracking-widest">
+                        <Wand2 className="w-4 h-4 text-[#3aa668]/70 group-hover:text-[#3aa668] transition-colors" />
+                        {t('lab.synthesis_mode')}
+                      </div>
+                      <div className="mt-1">
+                        <ProSelect
+                          value={synthesisMode}
+                          onChange={(v) => setSynthesisMode(v as any)}
+                          options={modeOptions}
+                          buttonClassName="!bg-white !border-[#e8ecea] !rounded-lg !py-2.5 !shadow-[0_2px_8px_rgba(0,0,0,0.02)]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3 p-4 bg-[#f8faf9] border border-[#e8ecea] rounded-[12px] hover:border-[#3aa668]/30 transition-colors group">
+                      <div className="flex items-center gap-2 text-[11px] font-bold text-[#6b7571] uppercase tracking-widest">
+                        <Clock className="w-4 h-4 text-[#3aa668]/70 group-hover:text-[#3aa668] transition-colors" />
+                        {t('lab.video_duration', '视频时长')}
+                      </div>
+                      <div className="mt-1">
+                        <ProSelect
+                          value={videoDuration}
+                          onChange={setVideoDuration}
+                          options={durationOptions}
+                          buttonClassName="!bg-white !border-[#e8ecea] !rounded-lg !py-2.5 !shadow-[0_2px_8px_rgba(0,0,0,0.02)]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3 p-4 bg-[#f8faf9] border border-[#e8ecea] rounded-[12px] hover:border-[#3aa668]/30 transition-colors group">
+                      <div className="flex items-center gap-2 text-[11px] font-bold text-[#6b7571] uppercase tracking-widest">
+                        <Film className="w-4 h-4 text-[#3aa668]/70 group-hover:text-[#3aa668] transition-colors" />
+                        {t('lab.scene_count', '分镜数量')}
+                      </div>
+                      <div className="mt-1">
+                        <ProSelect
+                          value={sceneCount}
+                          onChange={setSceneCount}
+                          options={sceneCountOptions}
+                          buttonClassName="!bg-white !border-[#e8ecea] !rounded-lg !py-2.5 !shadow-[0_2px_8px_rgba(0,0,0,0.02)]"
+                        />
+                      </div>
+                    </div>
                   </div>
 
-                  <AnimatePresence initial={false}>
-                    {presetsOpen && (
-                      <motion.div
-                        key="presets-drawer"
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="overflow-hidden rounded-xl border border-outline-variant/35 bg-surface-container-low shadow-inner"
-                      >
-                        <div className="p-3 space-y-2">
-                          <div className="flex items-center gap-2">
-                            <input
-                              value={newPresetName}
-                              onChange={(e) => setNewPresetName(e.target.value)}
-                              placeholder={t('lab.presets.name_placeholder') || 'Preset name'}
-                              className="flex-1 bg-surface-container-high text-[11px] text-on-surface px-2 py-1.5 rounded border border-outline-variant/35 focus:outline-none focus:border-primary/50"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const payload = buildCurrentPayload();
-                                if (!payload) return;
-                                labQueue.savePreset(newPresetName, payload);
-                                setNewPresetName('');
-                              }}
-                              disabled={!currentProject || !regionId || labQueue.presets.length >= 10}
-                              className="btn-director-secondary text-[10px] px-3 py-1.5 font-bold uppercase tracking-widest disabled:opacity-50"
-                            >
-                              {t('lab.presets.save') || 'Save'}
+                  <div className="flex flex-col gap-3 p-4 bg-[#f8faf9] border border-[#e8ecea] rounded-[12px] hover:border-[#3aa668]/30 transition-colors group">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-[11px] font-bold text-[#6b7571] uppercase tracking-widest">
+                        <MessageSquare className="w-4 h-4 text-[#3aa668]/70 group-hover:text-[#3aa668] transition-colors" />
+                        {t('lab.user_prompt', '自定义提示词')}
+                      </div>
+                      {currentProject?.game_info && (
+                        <div className="flex items-center gap-1.5">
+                          {Object.keys(currentProject.game_info.usp || {}).length > 0 && (
+                            <button onClick={() => {
+                                const uspData = currentProject.game_info.usp || {};
+                                const firstKey = Object.keys(uspData)[0];
+                                setUserPrompt(prev => prev + (prev ? '\\n' : '') + `Focus USP: ${uspData[firstKey]}`);
+                            }} className="text-[10px] font-bold px-2.5 py-1 rounded-md border border-[#3aa668]/20 bg-[#f0fdf4] text-[#1a5d3f] hover:bg-[#dcfce7] transition-colors">
+                              + USP
                             </button>
-                          </div>
-                          {labQueue.presets.length === 0 ? (
-                            <div className="text-[10px] text-on-surface-variant py-2 text-center">
-                              {t('lab.presets.empty') || 'No presets yet. Save current parameters to reuse later.'}
-                            </div>
-                          ) : (
-                            <ul className="space-y-1.5 max-h-[240px] overflow-y-auto pr-1">
-                              {labQueue.presets.map((p) => (
-                                <li
-                                  key={p.id}
-                                  className="flex items-center justify-between gap-2 bg-surface-container-high border border-outline-variant/30 rounded-lg px-2 py-1.5"
-                                >
-                                  <div className="flex-1 min-w-0">
-                                    <div className="text-[11px] font-semibold text-on-surface truncate">
-                                      {p.pinned ? '📌 ' : ''}
-                                      {p.name}
-                                    </div>
-                                    <div className="text-[9px] text-on-surface-variant truncate">
-                                      {p.payload.kind.toUpperCase()} · {new Date(p.createdAt).toLocaleString()}
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center gap-1 shrink-0">
-                                    <button
-                                      type="button"
-                                      title={t('lab.presets.queue') || 'Add to queue'}
-                                      onClick={() => labQueue.addJob(p.payload, p.name)}
-                                      className="text-on-surface-variant hover:text-primary p-1"
-                                    >
-                                      <ListPlus className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      title={p.pinned ? t('lab.presets.unpin') || 'Unpin' : t('lab.presets.pin') || 'Pin'}
-                                      onClick={() => labQueue.togglePinPreset(p.id)}
-                                      className="text-on-surface-variant hover:text-secondary p-1"
-                                    >
-                                      {p.pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      title={t('lab.presets.delete') || 'Delete'}
-                                      onClick={() => labQueue.deletePreset(p.id)}
-                                      className="text-on-surface-variant hover:text-error p-1"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </li>
-                              ))}
-                            </ul>
+                          )}
+                          {currentProject.game_info.core_loop && (
+                            <button onClick={() => setUserPrompt(prev => prev + (prev ? '\\n' : '') + `Gameplay Note: ${currentProject.game_info.core_loop}`)} className="text-[10px] font-bold px-2.5 py-1 rounded-md border-[#3aa668]/20 bg-[#f0fdf4] text-[#1a5d3f] hover:bg-[#dcfce7] transition-colors border">
+                              + Core Loop
+                            </button>
+                          )}
+                          {currentProject.game_info.persona && (
+                            <button onClick={() => setUserPrompt(prev => prev + (prev ? '\\n' : '') + `Targeting: ${currentProject.game_info.persona}`)} className="text-[10px] font-bold px-2.5 py-1 rounded-md border border-[#3aa668]/20 bg-[#f0fdf4] text-[#1a5d3f] hover:bg-[#dcfce7] transition-colors">
+                              + Persona
+                            </button>
                           )}
                         </div>
-                      </motion.div>
-                    )}
-                    {queueOpen && (
-                      <motion.div
-                        key="queue-drawer"
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="overflow-hidden rounded-xl border border-outline-variant/35 bg-surface-container-low shadow-inner"
-                      >
-                        <div className="p-3 space-y-2">
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const payload = buildCurrentPayload();
-                                if (!payload) return;
-                                labQueue.addJob(payload);
-                              }}
-                              disabled={!currentProject || !regionId}
-                              className="btn-director-secondary text-[10px] px-3 py-1.5 font-bold uppercase tracking-widest disabled:opacity-50 flex items-center gap-1.5"
-                            >
-                              <ListPlus className="w-3.5 h-3.5" /> {t('lab.queue.add') || 'Add current'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => labQueue.runAll()}
-                              disabled={labQueue.isRunning || labQueue.pendingCount === 0}
-                              className="btn-director-primary text-[10px] px-3 py-1.5 font-bold uppercase tracking-widest disabled:opacity-50 flex items-center gap-1.5"
-                            >
-                              <Play className="w-3.5 h-3.5" /> {t('lab.queue.run_all') || 'Run all'}
-                            </button>
-                            {labQueue.isRunning && (
-                              <button
-                                type="button"
-                                onClick={labQueue.cancelRun}
-                                className="text-[10px] px-3 py-1.5 font-bold uppercase tracking-widest bg-amber-100 text-amber-800 border border-amber-300 rounded-md flex items-center gap-1.5"
-                              >
-                                <X className="w-3.5 h-3.5" /> {t('lab.queue.cancel') || 'Cancel'}
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => labQueue.clearQueue(false)}
-                              disabled={labQueue.queue.length === 0 || labQueue.isRunning}
-                              className="ml-auto text-[10px] px-2 py-1.5 font-bold uppercase tracking-widest text-on-surface-variant hover:text-error disabled:opacity-50"
-                              title={t('lab.queue.clear_all') || 'Clear all'}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                      )}
+                    </div>
+                    <textarea
+                      value={userPrompt}
+                      onChange={(e: any) => setUserPrompt(e.target.value)}
+                      placeholder={t('lab.user_prompt_placeholder', 'e.g., 必须出现一个金币宝箱...') as string}
+                      className="bg-white w-full h-[80px] text-[13px] font-medium border border-[#e8ecea] rounded-lg px-4 py-3 focus:outline-none focus:border-[#3aa668]/50 focus:ring-2 focus:ring-[#3aa668]/10 text-[#111827] transition-all resize-none custom-scrollbar shadow-[0_2px_8px_rgba(0,0,0,0.02)]"
+                    />
+                  </div>
 
-                          {labQueue.pendingCount > 0 && (
-                            <div className="text-[10px] text-on-surface-variant flex items-center gap-2">
-                              <Clock className="w-3 h-3" />
-                              {t('lab.queue.progress', {
-                                done: labQueue.queue.filter((j) => j.status === 'ok' || j.status === 'failed').length,
-                                total: labQueue.queue.length,
-                              }) || `${labQueue.queue.filter((j) => j.status === 'ok' || j.status === 'failed').length}/${labQueue.queue.length} done`}
-                              {' · '}
-                              ETA ~{Math.max(1, Math.round(labQueue.etaMs / 1000))}s
-                            </div>
-                          )}
-
-                          {labQueue.queue.length === 0 ? (
-                            <div className="text-[10px] text-on-surface-variant py-2 text-center">
-                              {t('lab.queue.empty') || 'Queue is empty. Add parameter sets here to batch-run them later.'}
-                            </div>
-                          ) : (
-                            <ul className="space-y-1.5 max-h-[280px] overflow-y-auto pr-1">
-                              {labQueue.queue.map((j) => (
-                                <li
-                                  key={j.id}
-                                  className={`flex items-center justify-between gap-2 border rounded-lg px-2 py-1.5 ${
-                                    j.status === 'running'
-                                      ? 'bg-primary/5 border-primary/30'
-                                      : j.status === 'ok'
-                                      ? 'bg-emerald-50 border-emerald-200'
-                                      : j.status === 'failed'
-                                      ? 'bg-error/10 border-error/30'
-                                      : 'bg-surface-container-high border-outline-variant/30'
-                                  }`}
-                                >
-                                  <div className="flex-1 min-w-0">
-                                    <div className="text-[11px] font-semibold text-on-surface truncate flex items-center gap-1.5">
-                                      {j.status === 'ok' ? (
-                                        <CheckCircle className="w-3 h-3 text-emerald-600" />
-                                      ) : j.status === 'failed' ? (
-                                        <XCircle className="w-3 h-3 text-error" />
-                                      ) : j.status === 'running' ? (
-                                        <RefreshCw className="w-3 h-3 text-primary animate-spin" />
-                                      ) : (
-                                        <Clock className="w-3 h-3 text-on-surface-variant" />
-                                      )}
-                                      <span className="truncate">{j.label}</span>
-                                    </div>
-                                    {j.error && (
-                                      <div className="text-[9px] text-error truncate" title={j.error}>
-                                        {j.error}
-                                      </div>
-                                    )}
-                                    {j.scriptId && (
-                                      <div className="text-[9px] text-on-surface-variant truncate font-mono">
-                                        {j.scriptId}
-                                      </div>
-                                    )}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => labQueue.removeJob(j.id)}
-                                    disabled={j.status === 'running'}
-                                    className="text-on-surface-variant hover:text-error p-1 disabled:opacity-30"
-                                    title={t('lab.queue.remove') || 'Remove'}
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                  <div className="flex items-center justify-between mt-1 p-5 rounded-[12px] bg-[linear-gradient(45deg,rgba(58,166,104,0.05),transparent)] border border-[#3aa668]/20 relative overflow-hidden group">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-[#3aa668]/10 rounded-full blur-[40px] pointer-events-none group-hover:bg-[#3aa668]/20 transition-colors" />
+                    <div className="flex items-center gap-4 relative z-10">
+                      <div className="w-10 h-10 rounded-xl bg-white border border-[#3aa668]/20 shadow-sm flex items-center justify-center">
+                        <ShieldCheck className="w-5 h-5 text-[#3aa668]" />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[13px] font-black text-[#111827] tracking-widest">{t('lab.compliance_suggest', '合规风控拦截')}</span>
+                        <span className="text-[11px] text-[#6b7571] font-medium tracking-wide">Automatic interception and feedback loop for policy violations.</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white border border-[#3aa668]/30 text-[#3aa668] shadow-sm relative z-10">
+                      <div className="w-1.5 h-1.5 rounded-full bg-[#3aa668] shadow-[0_0_8px_rgba(58,166,104,0.8)] animate-pulse" />
+                      <span className="text-[10px] font-black tracking-widest leading-none">ACTIVE</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
 
-           {/* Column 3: Output Feed */}
-           <div className="w-full lg:w-[320px] xl:w-[380px] shrink-0 flex flex-col min-h-0 lg:border-l border-outline-variant/30 lg:pl-6 pb-4">
-              <div className="flex items-center justify-between pb-3 shrink-0">
-                 <span className="text-[11px] uppercase font-bold tracking-[0.1em] text-on-surface-variant flex items-center gap-1.5">
-                    {synthesisResult ? <Eye className="w-3.5 h-3.5 text-primary" /> : <Activity className={`w-3.5 h-3.5 ${isSyncingFeed ? 'text-primary animate-pulse' : ''}`} />}
-                    {synthesisResult ? t('lab.feed.compiled_blueprint') : t('lab.feed.resonance_feed')}
-                 </span>
-                 <span className={`text-[9px] font-bold tracking-[0.1em] px-2 py-0.5 rounded border ${synthesisResult ? 'bg-primary/10 text-primary border-primary/20' : (isSyncingFeed ? 'bg-primary/5 text-primary border-primary/20 animate-pulse' : 'bg-surface-container-high text-on-surface-variant border-outline-variant/30')}`}>
-                    {synthesisResult ? t('lab.feed.secure') : (isSyncingFeed ? t('lab.feed.syncing') : t('lab.feed.standby'))}
-                 </span>
-              </div>
+          {/* Sticky Action Bar */}
+          <div className="shrink-0 p-5 bg-white/90 backdrop-blur-xl border-t border-[#e8ecea] flex items-center gap-4 z-30">
+            <motion.button
+              onClick={() => {
+                if (noKeyConfigured) {
+                  navigate('/hub', { state: { openProviders: true } });
+                  return;
+                }
+                handleSynthesize();
+              }}
+              disabled={isSynthesizing || !currentProject || !regionId}
+              whileHover={{ scale: 1.01 }}
+              whileTap={{ scale: 0.98 }}
+              className={`flex-1 py-4 text-[13px] font-bold tracking-widest flex items-center justify-center gap-3 rounded-[12px] bg-gradient-to-r from-[#0da678] to-[#128a65] text-white shadow-[0_4px_20px_rgba(13,166,120,0.3)] hover:shadow-[0_6px_24px_rgba(13,166,120,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed ${noKeyConfigured ? 'grayscale opacity-80 cursor-not-allowed hover:shadow-none' : ''}`}
+            >
+              {isSynthesizing ? <RefreshCw className="animate-spin w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
+              {noKeyConfigured 
+                ? t('lab.no_key_configured', '未配置 Key') 
+                : (isSynthesizing ? t('lab.syncing', '正在生成...') : t('lab.initiate_synthesis', '开始生成'))}
+            </motion.button>
 
-              <div
-                className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1 bg-surface-container-lowest/50 rounded-2xl border border-outline-variant/20 p-2 relative"
-                style={{ scrollbarGutter: 'stable' }}
-              >
-                 <AnimatePresence mode="wait">
-                    {!synthesisResult ? (
-                      <motion.div key="feed" initial={{ opacity: 0 }} animate={{ opacity: isSyncingFeed ? 0.5 : 1, filter: isSyncingFeed ? 'blur(2px)' : 'blur(0px)' }} exit={{ opacity: 0 }} className="flex flex-col gap-3 p-1 h-fit">
-                         {activeRegion && (
-                           <motion.div layout initial={{opacity: 0, y: 10}} animate={{opacity: 1, y: 0}} className="bg-surface-container-lowest border border-outline-variant/40 shadow-sm rounded-2xl p-3 shrink-0">
-                             <details open>
-                               <summary className="cursor-pointer select-none list-none flex items-center justify-between gap-2">
-                                 <div className="text-[10px] font-bold uppercase tracking-widest text-primary flex items-center gap-1.5">
-                                   <Globe className="w-3 h-3" /> {t('lab.feed.region_node')}
-                                 </div>
-                                 <span className="text-[10px] font-mono text-on-surface-variant truncate max-w-[140px]">{activeRegion.id}</span>
-                               </summary>
-                               <div className="pt-2 text-[11px] text-on-surface/80 leading-relaxed space-y-1.5">
-                                 <div className="line-clamp-2">
-                                   <span className="font-semibold text-on-surface">{t('lab.feed.constraint')}:</span> {activeRegion.culture_notes?.[0]}
-                                 </div>
-                                 <div className="truncate">
-                                   <span className="font-semibold text-on-surface">{t('lab.feed.bgm')}:</span> {activeRegion.preferred_bgm}
-                                 </div>
-                               </div>
-                             </details>
-                           </motion.div>
-                         )}
-                         {activePlatform && (
-                           <motion.div layout initial={{opacity: 0, y: 10}} animate={{opacity: 1, y: 0}} className="bg-surface-container-lowest border border-outline-variant/40 shadow-sm rounded-2xl p-3 shrink-0">
-                             <details open>
-                               <summary className="cursor-pointer select-none list-none flex items-center justify-between gap-2">
-                                 <div className="text-[10px] font-bold uppercase tracking-widest text-secondary flex items-center gap-1.5">
-                                   <MonitorPlay className="w-3 h-3" /> {t('lab.feed.platform_node')}
-                                 </div>
-                                 <span className="text-[10px] font-mono text-on-surface-variant truncate max-w-[140px]">{activePlatform.id}</span>
-                               </summary>
-                               <div className="pt-2 text-[11px] text-on-surface/80 leading-relaxed">
-                                 <div className="line-clamp-3">
-                                   <span className="font-semibold text-on-surface">{t('lab.feed.rules')}:</span> {(activePlatform.specs?.[0] ?? '') as any}
-                                 </div>
-                               </div>
-                             </details>
-                           </motion.div>
-                         )}
-                         {activeAngle && (
-                           <motion.div layout initial={{opacity: 0, y: 10}} animate={{opacity: 1, y: 0}} className="bg-surface-container-lowest border border-outline-variant/40 shadow-sm rounded-2xl p-3 shrink-0">
-                             <details open>
-                               <summary className="cursor-pointer select-none list-none flex items-center justify-between gap-2">
-                                 <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 flex items-center gap-1.5">
-                                   <Target className="w-3 h-3" /> {t('lab.feed.angle_node')}
-                                 </div>
-                                 <span className="text-[10px] font-mono text-on-surface-variant truncate max-w-[140px]">{activeAngle.id}</span>
-                               </summary>
-                               <div className="pt-2 text-[11px] text-on-surface/80 leading-relaxed space-y-1.5">
-                                 <div className="truncate">
-                                   <span className="font-semibold text-on-surface">{t('lab.feed.emotion')}:</span> {activeAngle.core_emotion}
-                                 </div>
-                                 <div className="line-clamp-3">
-                                   <span className="font-semibold text-on-surface">{t('lab.feed.logic')}:</span> {(activeAngle.logic_steps?.[0] ?? '') as any}
-                                 </div>
-                               </div>
-                             </details>
-                           </motion.div>
-                         )}
-                      </motion.div>
-                    ) : (
-                      <motion.div key="result" variants={{ hidden: {}, show: { transition: { staggerChildren: 0.1 } } }} initial="hidden" animate="show" className="flex flex-col gap-4 p-1 h-fit">
-                         <motion.div variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }} className="bg-primary/5 border border-primary/20 rounded-xl p-4 shrink-0">
-                           <div className="flex justify-between items-center mb-3 border-b border-primary/10 pb-2">
-                              <div className="text-[10px] uppercase font-bold text-primary tracking-widest flex items-center gap-2"><BrainCircuit className="w-4 h-4" /> PSY-INSIGHT</div>
-                              {synthesisResult.script_id && (
-                                 <div className="text-[9px] font-mono text-primary bg-primary/10 px-2 py-0.5 rounded flex items-center gap-1.5">
-                                   ID: {synthesisResult.script_id}
-                                 </div>
-                              )}
-                           </div>
-                           <div className="text-[12px] text-on-surface/90 leading-relaxed font-medium">
-                            {isQuickCopyResult ? t('lab.result.quick_copy_ready') : synthesisResult.psychology_insight}
-                           </div>
-                         </motion.div>
-                         <motion.div variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }} className="bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-3 shrink-0 flex items-center justify-between gap-2">
-                           <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{t('lab.dashboard.title')}</div>
-                           <button
-                             type="button"
-                             onClick={() => setDashboardOpen(true)}
-                             className="btn-director-secondary px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-widest flex items-center gap-2"
-                           >
-                             <Eye className="w-4 h-4" /> {t('lab.result.open_dashboard')}
-                           </button>
-                         </motion.div>
-                        {synthesisResult.review && (
-                          <motion.div variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }} className="bg-amber-50 border border-amber-200 rounded-xl p-4 shrink-0">
-                            <div className="text-[10px] uppercase font-bold text-amber-700 tracking-widest mb-2">AUTO REVIEW</div>
-                            <div className="text-[12px] text-amber-900 mb-2">
-                              Score: {synthesisResult.review?.score_breakdown?.overall ?? 'N/A'}
-                            </div>
-                            {Array.isArray(synthesisResult.review?.issues) && synthesisResult.review.issues.length > 0 && (
-                              <div className="text-[11px] text-red-700 mb-1">
-                                Issues: {synthesisResult.review.issues.map((i: any) => i.message).join(' | ')}
+            <motion.button
+              onClick={() => {
+                if (noKeyConfigured) {
+                  navigate('/hub', { state: { openProviders: true } });
+                  return;
+                }
+                const payload = currentPayloadBuilder();
+                if (payload) labQueue.addJob(payload, `Job: ${currentProject?.name}`);
+              }}
+              disabled={isSynthesizing || !currentProject || !regionId}
+              whileHover={{ scale: 1.01 }}
+              whileTap={{ scale: 0.98 }}
+              className={`w-[140px] py-4 text-[13px] font-bold tracking-widest flex items-center justify-center gap-2 rounded-[12px] bg-white border border-[#e8ecea] text-[#1a5d3f] shadow-sm hover:bg-[#f8faf9] hover:border-[#3aa668]/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed ${noKeyConfigured ? 'grayscale opacity-80 cursor-not-allowed' : ''}`}
+              title={t('lab.presets_enqueue', '加入队列') as string}
+            >
+              <ListPlus className="w-4 h-4" />
+              {t('lab.presets_enqueue', '加入队列')}
+            </motion.button>
+
+            <button
+              onClick={() => setPresetsOpen(v => !v)}
+              className="flex-shrink-0 w-14 h-14 flex items-center justify-center rounded-[12px] bg-white border border-[#e8ecea] shadow-[0_2px_10px_rgba(0,0,0,0.02)] hover:bg-[#f8faf9] hover:border-[#3aa668]/30 transition-all relative group"
+              title={t('lab.presets', 'Presets') as string}
+            >
+              <Save className="w-5 h-5 text-[#8a9891] group-hover:text-[#3aa668] transition-colors" />
+              {labQueue.presets.length > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 bg-[#1a5d3f] text-white text-[9px] font-black w-4 h-4 flex items-center justify-center rounded-full shadow-sm">{labQueue.presets.length}</span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setQueueOpen(v => !v)}
+              className="flex-shrink-0 w-14 h-14 flex items-center justify-center rounded-[12px] bg-white border border-[#e8ecea] shadow-[0_2px_10px_rgba(0,0,0,0.02)] hover:bg-[#f8faf9] hover:border-[#3aa668]/30 transition-all relative group"
+              title={t('lab.queue', 'Queue') as string}
+            >
+              <ListChecks className="w-5 h-5 text-[#8a9891] group-hover:text-[#3aa668] transition-colors" />
+              {labQueue.queue.length > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 bg-[#3aa668] text-white text-[9px] font-black w-4 h-4 flex items-center justify-center rounded-full shadow-sm">{labQueue.queue.length}</span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Feed Column */}
+        <div className="w-full lg:w-[320px] xl:w-[420px] shrink-0 flex flex-col min-h-0 relative bg-surface-container-lowest/40 backdrop-blur-md border border-outline-variant/30 rounded-2xl shadow-sm overflow-hidden z-20">
+          <div className="shrink-0 p-4 border-b border-outline-variant/30 bg-surface-container-low/50">
+            <StrategyConsole
+              title={t('lab.resonance_feed', 'Parameter Resonance')}
+              titleIcon={<Activity className={isSynthesizing ? 'animate-pulse text-primary' : 'w-3.5 h-3.5 text-primary'} />}
+              headerAction={
+                <div className="flex items-center gap-2">
+                  {isDnaMatched ? (
+                    <div className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-500/30 bg-emerald-500/10 text-[9px] font-bold text-emerald-600 uppercase tracking-widest">
+                      <Target className="w-2.5 h-2.5" /> DNA Matched
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-[9px] font-bold text-amber-600 uppercase tracking-widest">
+                      <Globe className="w-2.5 h-2.5" /> Generic Target
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setHistoryDrawerOpen(true)}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded border border-outline-variant/30 hover:bg-surface-container hover:text-primary transition-colors text-[9px] uppercase tracking-widest font-bold text-on-surface-variant"
+                  >
+                    <History className="w-3 h-3" />
+                    {t('lab.history_feed', 'History Feed')}
+                  </button>
+                </div>
+              }
+              metadata={metadata}
+              regionId={regionId} setRegionId={setRegionId}
+              platformId={platformId} setPlatformId={setPlatformId}
+              angleId={angleId} setAngleId={setAngleId}
+            />
+          </div>
+
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+            <div className="p-4">
+              <AnimatePresence mode="wait">
+                {!synthesisResult ? (
+                  <motion.div key="preview" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-full flex flex-col gap-4">
+                    {isPreviewLoading ? (
+                      <div className="flex flex-col gap-4 h-full">
+                        <div className="bg-surface-container-low/50 border border-outline-variant/20 rounded-2xl p-4 shadow-sm relative overflow-hidden">
+                          <div className="w-16 h-3 bg-surface-container-highest/50 rounded-full animate-pulse mb-4" />
+                          <div className="flex flex-col gap-3">
+                            <div className="w-full h-10 bg-surface-container-highest/30 rounded-xl animate-pulse" />
+                            <div className="w-5/6 h-10 bg-surface-container-highest/30 rounded-xl animate-pulse" />
+                          </div>
+                        </div>
+                        <div className="bg-surface-container-low/50 border border-outline-variant/20 rounded-2xl p-4 shadow-sm relative overflow-hidden">
+                          <div className="w-12 h-3 bg-surface-container-highest/50 rounded-full animate-pulse mb-4" />
+                          <div className="flex flex-col gap-2">
+                            <div className="w-full h-6 bg-surface-container-highest/30 rounded-lg animate-pulse" />
+                            <div className="w-3/4 h-6 bg-surface-container-highest/30 rounded-lg animate-pulse" />
+                          </div>
+                        </div>
+                      </div>
+                    ) : contextPreviewError ? (
+                      <div className="flex flex-col items-center justify-center h-full text-center space-y-4 px-6">
+                        <Network className="w-10 h-10 text-red-500/60" />
+                        <div className="text-[11px] font-black uppercase tracking-[0.1em] text-red-500/80">Oracle Sync Failed</div>
+                        <div className="text-[10px] text-on-surface-variant leading-relaxed max-w-[200px]">{contextPreviewError}</div>
+                        <button onClick={() => setPreviewRetry(v => v + 1)} className="mt-2 px-4 py-2 border border-red-500/30 text-red-500 text-[10px] uppercase font-bold rounded-lg hover:bg-red-500/10 transition-colors">Retry Sync</button>
+                      </div>
+                    ) : contextPreview ? (
+                      <div className="flex flex-col gap-4 pb-2">
+                        <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.1 }} className="bg-surface-container-low/50 backdrop-blur-md border border-primary/20 rounded-2xl p-4 shadow-sm relative overflow-hidden group shrink-0">
+                          <div className="absolute top-0 left-0 w-1.5 h-full bg-gradient-to-b from-primary to-primary/30" />
+                          <div className="absolute -right-4 -top-4 w-16 h-16 bg-primary/10 rounded-full blur-2xl group-hover:bg-primary/20 transition-all duration-500" />
+
+                          <div className="text-[10px] font-black text-primary mb-3 uppercase tracking-[0.15em] flex items-center justify-between">
+                            <span className="flex items-center gap-2"><Activity className="w-3.5 h-3.5" /> Oracle</span>
+                            <span className="bg-primary/10 border border-primary/20 text-primary/70 px-1.5 py-0.5 rounded text-[8px] font-mono tracking-widest">Real-time Intel</span>
+                          </div>
+                          <div className="flex flex-col gap-2.5 relative z-10">
+                            {contextPreview.oracle_flashes?.length > 0 ? contextPreview.oracle_flashes.map((flash: string, idx: number) => (
+                              <div key={idx} className="text-[12px] text-on-surface/90 font-medium leading-relaxed bg-surface-container-highest/40 p-3 rounded-xl border border-outline-variant/30 hover:border-primary/40 transition-colors">
+                                <span className="text-primary/60 mr-1.5 select-none font-mono">[{idx + 1}]</span>
+                                {flash}
+                              </div>
+                            )) : (
+                              <div className="text-[11px] text-on-surface-variant/50 italic py-1 pl-1">
+                                {t('lab.no_oracle_data', '未检索到相关高维灵感...')}
                               </div>
                             )}
-                            {Array.isArray(synthesisResult.review?.warnings) && synthesisResult.review.warnings.length > 0 && (
-                              <div className="text-[11px] text-amber-700">
-                                Warnings: {synthesisResult.review.warnings.map((i: any) => i.message).join(' | ')}
-                              </div>
-                            )}
-                          </motion.div>
-                        )}
-                        {Array.isArray(synthesisResult.drafts) && synthesisResult.drafts.length > 0 && (
-                          <motion.div variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }} className="bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-3 shrink-0">
-                            <div className="text-[10px] uppercase font-bold tracking-widest text-on-surface-variant mb-2">Draft Candidates</div>
-                            <div className="space-y-1">
-                              {synthesisResult.drafts.slice(0, 3).map((d: any, i: number) => (
-                                <div key={i} className="text-[11px] text-on-surface">
-                                  {d.id || `D${i + 1}`}: {d.title || d.hook || 'Untitled'}
+                          </div>
+                        </motion.div>
+
+                        <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.2 }} className="bg-surface-container-low/50 backdrop-blur-md border border-secondary/20 rounded-2xl p-4 shadow-sm relative overflow-hidden group shrink-0">
+                          <div className="absolute top-0 left-0 w-1.5 h-full bg-gradient-to-b from-secondary to-secondary/30" />
+                          <div className="absolute -right-4 -top-4 w-16 h-16 bg-secondary/10 rounded-full blur-2xl group-hover:bg-secondary/20 transition-all duration-500" />
+
+                          <div className="text-[10px] font-black text-secondary mb-3 uppercase tracking-[0.15em] flex items-center justify-between">
+                            <span className="flex items-center gap-2"><Network className="w-3.5 h-3.5" /> DNA</span>
+                            <span className="bg-secondary/10 border border-secondary/20 text-secondary/70 px-1.5 py-0.5 rounded text-[8px] font-mono tracking-widest">Project Bound</span>
+                          </div>
+                          <div className="flex flex-col gap-2 relative z-10">
+                            {contextPreview.dna_conflicts?.length > 0 ? contextPreview.dna_conflicts.map((conflict: string, idx: number) => (
+                              <div key={idx} className="flex items-start gap-2.5 text-[12px] font-medium leading-relaxed p-2">
+                                <div className="w-4 h-4 rounded bg-secondary/10 border border-secondary/30 flex items-center justify-center shrink-0 mt-0.5">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-secondary shadow-[0_0_8px_rgba(139,92,246,0.8)]" />
                                 </div>
-                              ))}
-                            </div>
-                          </motion.div>
-                        )}
+                                <span className="text-on-surface/90">{conflict}</span>
+                              </div>
+                            )) : (
+                              <div className="text-[11px] text-on-surface-variant/50 italic py-1 pl-1">
+                                {t('lab.no_dna_conflicts', '当前策略无明显基因冲突...')}
+                              </div>
+                            )}
+                          </div>
+                        </motion.div>
 
-                         {synthesisResult.markdown_path && (
-                           <div className="rounded-xl border border-outline-variant/35 bg-surface-container-high/80 px-3 py-2 text-[10px] font-mono text-on-surface-variant break-all">
-                             {t('lab.markdown_saved', { path: synthesisResult.markdown_path })}
-                           </div>
-                         )}
+                        <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.3 }} className="bg-surface-container-low/50 backdrop-blur-md border border-emerald-500/20 rounded-2xl p-4 shadow-sm relative overflow-hidden group shrink-0">
+                          <div className="absolute top-0 left-0 w-1.5 h-full bg-gradient-to-b from-emerald-500 to-emerald-500/30" />
+                          <div className="absolute -right-4 -top-4 w-16 h-16 bg-emerald-500/10 rounded-full blur-2xl group-hover:bg-emerald-500/20 transition-all duration-500" />
 
-                         {isQuickCopyResult ? (
-                           <div className="flex flex-col gap-3 pt-1">
-                             {(() => {
-                               const acm = synthesisResult.ad_copy_matrix;
-                               const locales: string[] = Array.isArray(acm?.locales) ? acm.locales : [acm?.default_locale || 'en'];
-                               const variants = acm?.variants || {};
-                               return locales.map((loc: string) => {
-                                 const v = variants?.[loc] || {};
-                                 const headlines: string[] = Array.isArray(v?.headlines) ? v.headlines : [];
-                                 const primary: string[] = Array.isArray(v?.primary_texts) ? v.primary_texts : [];
-                                 const hashtags: string[] = Array.isArray(v?.hashtags) ? v.hashtags : [];
-                                 const rows = headlines.map((h: string, i: number) => ({
-                                   headline: h,
-                                   primary_text: primary[i % Math.max(primary.length, 1)] || '',
-                                   hashtag_pack: hashtags.slice(0, 20).join(' '),
-                                 }));
-                                 return (
-                                   <motion.div
-                                     key={loc}
-                                     variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }}
-                                     className="bg-surface-container-lowest border border-outline-variant/40 shadow-sm rounded-xl p-3 shrink-0"
-                                   >
-                                     <div className="flex items-center justify-between mb-2">
-                                       <div className="text-[10px] font-black tracking-widest text-secondary uppercase">COPY MARKET · {loc}</div>
-                                       <button
-                                         type="button"
-                                         onClick={() => downloadCsv(loc, rows)}
-                                         className="btn-director-secondary px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-widest"
-                                       >
-                                         Export CSV
-                                       </button>
-                                     </div>
-                                     <div className="space-y-2">
-                                       <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Headlines</div>
-                                       <div className="space-y-1">
-                                         {headlines.slice(0, 20).map((h: string, i: number) => (
-                                           <div key={i} className="bg-surface-container-high border border-outline-variant/25 rounded-lg px-2.5 py-2 text-[12px] text-on-surface">
-                                             <div
-                                               contentEditable
-                                               suppressContentEditableWarning
-                                               className="outline-none"
-                                               onBlur={(e) => {
-                                                 const next = e.currentTarget.textContent || '';
-                                                 setSynthesisResult((prev: any) => {
-                                                   const nextObj = { ...(prev || {}) };
-                                                   const nextAcm = { ...(nextObj.ad_copy_matrix || {}) };
-                                                   const nextVariants = { ...(nextAcm.variants || {}) };
-                                                   const nextV = { ...(nextVariants[loc] || {}) };
-                                                   const nextHeadlines = Array.isArray(nextV.headlines) ? [...nextV.headlines] : [];
-                                                   nextHeadlines[i] = next;
-                                                   nextV.headlines = nextHeadlines;
-                                                   nextVariants[loc] = nextV;
-                                                   nextAcm.variants = nextVariants;
-                                                   nextObj.ad_copy_matrix = nextAcm;
-                                                   return nextObj;
-                                                 });
-                                               }}
-                                             >
-                                               {h}
-                                             </div>
-                                           </div>
-                                         ))}
-                                       </div>
-                                       <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest pt-2">Primary Texts</div>
-                                       <div className="space-y-1">
-                                         {primary.slice(0, 5).map((p: string, i: number) => (
-                                           <div key={i} className="bg-surface-container-high border border-outline-variant/25 rounded-lg px-2.5 py-2 text-[11px] text-on-surface-variant leading-relaxed">
-                                             {p}
-                                           </div>
-                                         ))}
-                                       </div>
-                                       <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest pt-2">Hashtags</div>
-                                       <div className="bg-surface-container-high border border-outline-variant/25 rounded-lg px-2.5 py-2 text-[10px] font-mono text-on-surface-variant break-words">
-                                         {hashtags.slice(0, 20).join(' ')}
-                                       </div>
-                                     </div>
-                                   </motion.div>
-                                 );
-                               });
-                             })()}
-                           </div>
-                         ) : (
-                           <div className="flex flex-col gap-3 pt-2">
-                             {synthesisResult.script.map((line: any, idx: number) => (
-                                <motion.div variants={{ hidden: { opacity: 0, x: 10 }, show: { opacity: 1, x: 0 } }} key={idx} className="bg-surface-container-lowest border border-outline-variant/40 shadow-sm rounded-xl p-3 hover:border-primary/30 transition-colors shrink-0">
-                                  <div className="text-[10px] font-bold text-primary mb-1">[{line.time}]</div>
-                                  <div className="text-[12px] text-on-surface leading-relaxed mb-3">{line.visual}</div>
-                                  <div className="text-[11px] font-medium text-on-surface-variant bg-surface-container p-2 rounded-lg border border-outline-variant/20 flex gap-2">
-                                    <span className="text-secondary font-bold">V/O:</span> 
-                                    {line.audio_content}
-                                  </div>
-                                </motion.div>
-                             ))}
-                           </div>
-                         )}
-                         
-                        <motion.button variants={{ hidden: { opacity: 0 }, show: { opacity: 1 } }} onClick={() => setSynthesisResult(null)} className="mt-4 w-full py-3 rounded-xl border border-outline-variant/40 text-xs font-bold text-on-surface-variant uppercase tracking-widest hover:bg-surface-container transition-colors">
-                           Reset Parameters
-                         </motion.button>
-                      </motion.div>
+                          <div className="text-[10px] font-black text-emerald-600 mb-3 uppercase tracking-[0.15em] flex items-center gap-2">
+                            <Target className="w-3.5 h-3.5" /> 视觉情绪词
+                          </div>
+                          <div className="flex flex-wrap gap-2 relative z-10">
+                            {contextPreview.visual_keywords?.length > 0 ? contextPreview.visual_keywords.map((kw: string, idx: number) => (
+                              <span key={idx} className="text-[11px] font-black text-emerald-600 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 transition-colors cursor-default">
+                                {kw}
+                              </span>
+                            )) : (
+                              <div className="text-[11px] text-on-surface-variant/50 italic py-1 pl-1">
+                                {t('lab.no_visual_keywords', '暂无视觉情绪映射...')}
+                              </div>
+                            )}
+                          </div>
+                        </motion.div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full text-center space-y-6 opacity-60">
+                        <div className="relative flex items-center justify-center w-24 h-24">
+                          <div className="absolute inset-0 rounded-full border border-primary/20 bg-primary/5" />
+                          <div className="absolute inset-2 rounded-full border border-primary/30" />
+                          <div className="absolute inset-6 rounded-full border border-primary/40 bg-primary/10 flex items-center justify-center">
+                            <Activity className="w-6 h-6 text-primary animate-pulse" />
+                          </div>
+                          <div className="absolute inset-0 rounded-full border-t border-primary animate-[spin_3s_linear_infinite]" />
+                          <div className="absolute top-1/2 -left-2 w-[110%] h-[1px] bg-primary/20" />
+                          <div className="absolute left-1/2 -top-2 w-[1px] h-[110%] bg-primary/20" />
+                        </div>
+                        <div className="flex flex-col items-center gap-2">
+                          <div className="text-[11px] font-black uppercase tracking-[0.3em] text-primary">{t('lab.standby', 'System Standby')}</div>
+                          <div className="text-[10px] text-on-surface-variant font-medium tracking-widest uppercase">Waiting for matrix parameters</div>
+                        </div>
+                      </div>
                     )}
-                 </AnimatePresence>
-              </div>
-           </div>
+                  </motion.div>
+                ) : (
+                  <motion.div key="result" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-3">
+                    {synthesisResult?.generation_metrics?.mode === 'draft' ? (
+                      <div className="space-y-4">
+                        <div className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest flex items-center gap-2 mb-4">
+                          <Activity className="w-3.5 h-3.5" /> {t('lab.draft_selection', 'Select Direction (Drafts)')}
+                        </div>
+                        {synthesisResult.drafts?.map((draft: any, idx: number) => (
+                          <div key={idx} className="bg-surface-container-low border border-outline-variant/30 rounded-xl p-4 shadow-sm hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => handleSelectDraft(draft)}>
+                            <div className="flex justify-between items-start mb-2">
+                              <div className="text-[12px] font-bold text-on-surface group-hover:text-primary transition-colors">{draft.title || draft.hook}</div>
+                              <div className="flex gap-2">
+                                <div className="text-[9px] font-mono bg-surface-container text-primary px-1.5 py-0.5 rounded border border-primary/20">CTR {draft.estimated_ctr || '--'}</div>
+                                <div className="text-[9px] font-mono bg-surface-container text-secondary px-1.5 py-0.5 rounded border border-secondary/20">QLTY {draft.estimated_quality || '--'}</div>
+                              </div>
+                            </div>
+                            <div className="text-[11px] text-on-surface-variant mb-3 leading-relaxed">{draft.story_arc || draft.gameplay_bridge}</div>
+                            {draft.reasoning && (
+                              <div className="text-[10px] text-secondary/80 bg-secondary/5 border border-secondary/10 p-2 rounded-lg italic mb-2">
+                                💡 {draft.reasoning}
+                              </div>
+                            )}
+                            {draft.risk_flags && draft.risk_flags.length > 0 && (
+                              <div className="flex gap-1 flex-wrap">
+                                {draft.risk_flags.map((flag: string, i: number) => (
+                                  <span key={i} className="text-[9px] text-red-400 bg-red-400/10 px-1.5 py-0.5 rounded">{flag}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : isQuickCopyResult ? (
+                      <div className="text-[11px] font-bold text-on-surface-variant text-center py-10">{t('lab.matrix_compiled', 'Matrix compiled. Check Dashboard.')}</div>
+                    ) : synthesisResult.script?.map((line: any, idx: number) => {
+                      const allocatedSec = parseAllocatedSeconds(line.time);
+                      const estimatedSec = estimateTTSDuration(line.audio_content, outputMode);
+                      const isOverflow = allocatedSec > 0 && estimatedSec > allocatedSec * 1.1;
+
+                      return (
+                        <div key={idx} className={`bg-surface-container-lowest border rounded-xl p-3 shadow-sm group transition-colors ${isOverflow ? 'border-red-500/50 shadow-[0_0_10px_rgba(239,68,68,0.1)]' : 'border-outline-variant/30 hover:border-primary/30'}`}>
+                          <div className="text-[10px] font-black text-primary mb-1.5 uppercase flex justify-between items-center">
+                            <span>[{line.time}]</span>
+                            <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[9px] text-on-surface-variant font-medium lowercase">Editable Block</span>
+                          </div>
+                          <textarea
+                            value={line.visual}
+                            onChange={(e) => handleScriptEdit(idx, 'visual', e.target.value)}
+                            className="w-full bg-transparent text-[12px] font-medium leading-relaxed mb-2 outline-none border border-transparent hover:border-outline-variant/30 focus:border-primary/50 focus:bg-surface-container-low rounded-lg p-1.5 resize-none transition-all"
+                            rows={Math.max(2, Math.ceil(line.visual.length / 50))}
+                          />
+                          <textarea
+                            value={line.audio_content}
+                            onChange={(e) => handleScriptEdit(idx, 'audio_content', e.target.value)}
+                            className={`w-full text-[11px] italic bg-surface-container/50 border rounded-lg p-2 outline-none resize-none transition-all ${isOverflow ? 'text-red-400 border-red-500/30 focus:border-red-500 focus:bg-red-500/5' : 'text-on-surface-variant border-transparent hover:border-outline-variant/30 focus:border-primary/50 focus:bg-surface-container-low'}`}
+                            rows={Math.max(2, Math.ceil(line.audio_content.length / 50))}
+                          />
+                          <div className="flex justify-end mt-1">
+                            <div className={`text-[9px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1 ${isOverflow ? 'bg-red-500/10 text-red-500 border border-red-500/20' : 'bg-surface-container text-on-surface-variant/70'}`}>
+                              TTS: ~{estimatedSec}s / {allocatedSec > 0 ? `${allocatedSec}s` : '???'}
+                              {isOverflow && <span className="font-bold">⚠️ OVERFLOW</span>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {!isQuickCopyResult && synthesisResult?.script && (
+                      <div className="mt-4 pt-4 border-t border-outline-variant/20">
+                        <div className="bg-surface-container-low border border-outline-variant/30 rounded-xl p-3 flex flex-col gap-3 shadow-sm">
+                          <div className="text-[10px] font-bold tracking-widest uppercase text-secondary flex items-center gap-2">
+                            <Activity className="w-3.5 h-3.5" /> {t('lab.refine_instruction', 'Refinement Instruction')}
+                          </div>
+                          <textarea
+                            value={refineInstruction}
+                            onChange={(e) => setRefineInstruction(e.target.value)}
+                            placeholder={t('lab.refine_placeholder', 'e.g., Make the ending more dramatic...')}
+                            className="w-full bg-surface text-[12px] text-on-surface border border-outline-variant/30 rounded-lg p-2 outline-none focus:border-secondary/50 resize-none"
+                            rows={2}
+                          />
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={handleRefine}
+                              disabled={isRefining || !refineInstruction.trim()}
+                              className="btn-director-secondary px-4 py-1.5 text-[11px] font-bold disabled:opacity-50 flex items-center gap-2"
+                            >
+                              {isRefining && <RefreshCw className="w-3 h-3 animate-spin" />}
+                              {t('lab.btn_refine', 'Refine Script')}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <button onClick={() => setSynthesisResult(null)} className="w-full py-3 mt-4 border border-outline-variant/30 text-[10px] uppercase font-black tracking-widest text-on-surface-variant bg-surface-container-low/30 hover:bg-surface-container-low transition-all">{t('lab.reset_feed', 'Reset Feed')}</button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </div>
         </div>
       </div>
+      <HistoryFeedDrawer isOpen={historyDrawerOpen} onClose={() => setHistoryDrawerOpen(false)} filterType="SOP" />
+      <QueueDrawer
+        isOpen={queueOpen}
+        onClose={() => setQueueOpen(false)}
+        queue={labQueue.queue}
+        clearQueue={labQueue.clearQueue}
+        removeJob={labQueue.removeJob}
+        runAll={labQueue.runAll}
+      />
+      <PresetsDrawer
+        isOpen={presetsOpen}
+        onClose={() => setPresetsOpen(false)}
+        presets={labQueue.presets}
+        addJob={labQueue.addJob}
+        deletePreset={labQueue.deletePreset}
+        togglePinPreset={labQueue.togglePinPreset}
+        savePreset={labQueue.savePreset}
+        currentPayloadBuilder={currentPayloadBuilder}
+      />
     </div>
   );
 };

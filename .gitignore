@@ -39,6 +39,8 @@ start.png
 **/.coverage.*
 **/.python-version
 **/*.sqlite3
+**/*.sqlite3-wal
+**/*.sqlite3-shm
 
 backend/venv/
 backend/usage_counters.json

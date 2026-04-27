@@ -138,7 +138,7 @@ def load_all_grouped() -> dict[str, Any]:
     ``scan_ad_copy`` / admin endpoints keep working unchanged.
     """
     rows = fetchall(
-        "SELECT scope, region_id, platform_id, term, severity, note, data_json FROM compliance_rules"
+        "SELECT scope, region_id, platform_id, term, severity, note, data_json FROM compliance_rules WHERE archived_at IS NULL"
     )
     global_terms: list[dict[str, Any]] = []
     platform_overrides: dict[str, list[dict[str, Any]]] = {}

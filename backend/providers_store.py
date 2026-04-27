@@ -27,7 +27,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Iterable, Optional
 
-from db import fetchone, execute
+from cryptography.fernet import Fernet
+from db import fetchone, execute, BACKEND_DIR
 
 
 @dataclass
@@ -41,11 +42,56 @@ class ProviderSettings:
     last_tested_at: Optional[str] = None
     last_test_ok: Optional[bool] = None
     last_test_note: Optional[str] = None
+    last_compliance_score: Optional[int] = None
+    last_compliance_at: Optional[str] = None
     updated_at: Optional[str] = None
 
 
 _EMPTY = ProviderSettings(id="")
 
+_CIPHER: Optional[Fernet] = None
+
+def _get_cipher() -> Fernet:
+    global _CIPHER
+    if _CIPHER is not None:
+        return _CIPHER
+        
+    env_key = os.getenv("AVOCADO_ENCRYPTION_KEY")
+    if env_key:
+        _CIPHER = Fernet(env_key.encode("utf-8"))
+        return _CIPHER
+        
+    secret_file = BACKEND_DIR / "data" / ".secret_key"
+    if secret_file.exists():
+        key = secret_file.read_bytes().strip()
+    else:
+        key = Fernet.generate_key()
+        secret_file.parent.mkdir(parents=True, exist_ok=True)
+        secret_file.write_bytes(key)
+        
+    _CIPHER = Fernet(key)
+    return _CIPHER
+
+def _encrypt_key(plain: Optional[str]) -> Optional[str]:
+    if not plain:
+        return plain
+    return _get_cipher().encrypt(plain.encode("utf-8")).decode("utf-8")
+
+def _decrypt_key(encrypted: Optional[str], provider_id: str) -> Optional[str]:
+    if not encrypted:
+        return encrypted
+    try:
+        return _get_cipher().decrypt(encrypted.encode("utf-8")).decode("utf-8")
+    except Exception:
+        # Read-time migration for legacy plaintext keys
+        if not encrypted.startswith("gAAAAA"):
+            migrated = _encrypt_key(encrypted)
+            execute(
+                "UPDATE provider_settings SET api_key = ? WHERE id = ?",
+                (migrated, provider_id)
+            )
+            return encrypted
+        return None
 
 def _row_to_settings(row: Any) -> ProviderSettings:
     extras_raw = (row["extra_models_json"] if "extra_models_json" in row.keys() else None) or "[]"
@@ -57,7 +103,7 @@ def _row_to_settings(row: Any) -> ProviderSettings:
         extras = []
     return ProviderSettings(
         id=str(row["id"]),
-        api_key=row["api_key"] or None,
+        api_key=_decrypt_key(row["api_key"], str(row["id"])) if row["api_key"] else None,
         base_url=row["base_url"] or None,
         default_model=row["default_model"] or None,
         extra_models=[str(m).strip() for m in extras if str(m).strip()],
@@ -65,6 +111,8 @@ def _row_to_settings(row: Any) -> ProviderSettings:
         last_tested_at=row["last_tested_at"] or None,
         last_test_ok=None if row["last_test_ok"] is None else bool(row["last_test_ok"]),
         last_test_note=row["last_test_note"] or None,
+        last_compliance_score=int(row["last_compliance_score"]) if row["last_compliance_score"] is not None else None,
+        last_compliance_at=row["last_compliance_at"] or None,
         updated_at=row["updated_at"] or None,
     )
 
@@ -147,7 +195,7 @@ def upsert_settings(
         """,
         (
             provider_id,
-            new_api_key,
+            _encrypt_key(new_api_key),
             new_base_url,
             new_default_model,
             json.dumps(new_extras, ensure_ascii=False),
@@ -176,8 +224,9 @@ def record_test_result(
         """
         INSERT INTO provider_settings(
             id, api_key, base_url, default_model, extra_models_json,
-            enabled, last_tested_at, last_test_ok, last_test_note, updated_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            enabled, last_tested_at, last_test_ok, last_test_note,
+            last_compliance_score, last_compliance_at, updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             last_tested_at=excluded.last_tested_at,
             last_test_ok=excluded.last_test_ok,
@@ -194,6 +243,50 @@ def record_test_result(
             now,
             1 if ok else 0,
             (note or "").strip()[:500],
+            current.last_compliance_score,
+            current.last_compliance_at,
+            now,
+        ),
+    )
+    return get_settings(provider_id)
+
+
+def record_compliance_result(
+    provider_id: str,
+    *,
+    score: int,
+    model_id: str = "",
+) -> ProviderSettings:
+    """Persist the Factor Compliance Test score for UI display."""
+    if not provider_id:
+        raise ValueError("provider_id is required")
+    current = get_settings(provider_id)
+    now = datetime.utcnow().isoformat() + "Z"
+    note = f"compliance_score={score} via {model_id}" if model_id else f"compliance_score={score}"
+    execute(
+        """
+        INSERT INTO provider_settings(
+            id, api_key, base_url, default_model, extra_models_json,
+            enabled, last_tested_at, last_test_ok, last_test_note,
+            last_compliance_score, last_compliance_at, updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            last_compliance_score=excluded.last_compliance_score,
+            last_compliance_at=excluded.last_compliance_at,
+            updated_at=excluded.updated_at
+        """,
+        (
+            provider_id,
+            current.api_key,
+            current.base_url,
+            current.default_model,
+            json.dumps(current.extra_models, ensure_ascii=False),
+            1 if current.enabled else 0,
+            current.last_tested_at,
+            None if current.last_test_ok is None else (1 if current.last_test_ok else 0),
+            note,
+            score,
+            now,
             now,
         ),
     )
@@ -217,10 +310,7 @@ def mask_api_key(key: Optional[str]) -> str:
 
 
 def resolve_api_key(provider_id: str, env_name: str) -> tuple[Optional[str], str]:
-    """Return ``(api_key, source)`` where source is ``db`` / ``env`` / ``none``."""
-    settings = get_settings(provider_id)
-    if settings.api_key:
-        return settings.api_key, "db"
+    """Return ``(api_key, source)`` where source is ``env`` / ``none``."""
     env_val = os.getenv(env_name)
     if env_val and env_val.strip():
         return env_val.strip(), "env"
@@ -230,9 +320,6 @@ def resolve_api_key(provider_id: str, env_name: str) -> tuple[Optional[str], str
 def resolve_base_url(
     provider_id: str, env_name: str, fallback: str
 ) -> tuple[str, str]:
-    settings = get_settings(provider_id)
-    if settings.base_url:
-        return settings.base_url, "db"
     env_val = os.getenv(env_name)
     if env_val and env_val.strip():
         return env_val.strip(), "env"

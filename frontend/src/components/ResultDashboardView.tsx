@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Copy, Download, FileText, FolderOpen, LayoutGrid, Package, RefreshCw, Search, Table2, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { AlertTriangle, Copy, Download, FileText, FolderOpen, LayoutGrid, Package, RefreshCw, Search, Table2, X, Trophy } from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
@@ -49,6 +49,8 @@ export function ResultDashboardView({
   const [markdownText, setMarkdownText] = useState('');
   const [isMarkdownLoading, setIsMarkdownLoading] = useState(false);
   const [isPackaging, setIsPackaging] = useState(false);
+  const [isMarkingWinner, setIsMarkingWinner] = useState(false);
+  const [markedWinner, setMarkedWinner] = useState(false);
   const [complianceOpen, setComplianceOpen] = useState(false);
   // B4 — tracks which region is currently retrying.
   const [retryingRegion, setRetryingRegion] = useState<string | null>(null);
@@ -57,6 +59,13 @@ export function ResultDashboardView({
   const [matrixKind, setMatrixKind] = useState<'headline' | 'primary_text' | 'hashtag'>('headline');
   const [matrixSearch, setMatrixSearch] = useState('');
 
+  const isMounted = useRef(true);
+  useEffect(() => {
+    isMounted.current = true;
+    return () => { isMounted.current = false; };
+  }, []);
+
+  const isCopyTask = result?.payload?.kind === 'quick_copy' || result?.payload?.kind === 'refresh_copy';
   const compliance = result?.compliance as AnyObj | undefined;
   const complianceHits = useMemo(() => (Array.isArray(compliance?.hits) ? compliance?.hits : []), [compliance]);
   const complianceSuggestions = useMemo(() => (Array.isArray(compliance?.suggestions) ? compliance?.suggestions : []), [compliance]);
@@ -87,9 +96,24 @@ export function ResultDashboardView({
     } catch (err) {
       console.error('retry-region failed', err);
     } finally {
-      setRetryingRegion(null);
+      if (isMounted.current) setRetryingRegion(null);
     }
   }
+
+  const markAsWinner = async () => {
+    if (!result?.script_id) return;
+    setIsMarkingWinner(true);
+    try {
+      await axios.post(`${API_BASE}/api/history/${result.script_id}/mark-winner`, {
+        performance_stats: { marked_at: Date.now(), source: 'dashboard' }
+      });
+      if (isMounted.current) setMarkedWinner(true);
+    } catch (err) {
+      console.error('Failed to mark winner', err);
+    } finally {
+      if (isMounted.current) setIsMarkingWinner(false);
+    }
+  };
 
   const adCopyTiles = useMemo(() => {
     const tiles = result?.ad_copy_tiles;
@@ -140,15 +164,33 @@ export function ResultDashboardView({
   }, [open]);
 
   useEffect(() => {
+    // Reset winner state when result changes
+    setMarkedWinner(Boolean(result?.is_winner));
+  }, [result?.script_id, result?.is_winner]);
+
+  useEffect(() => {
     const path = result?.markdown_path as string | undefined;
-    if (!open || !path) return;
+    if (!open) {
+      if (isMounted.current) setIsMarkdownLoading(false);
+      return;
+    }
+    if (!path) {
+      if (isMounted.current) {
+        setIsMarkdownLoading(false);
+        setMarkdownText('');
+      }
+      return;
+    }
     setIsMarkdownLoading(true);
     setMarkdownText('');
     axios
       .get(`${API_BASE}/api/out/markdown`, { params: { path } })
-      .then((res) => setMarkdownText(String(res.data?.markdown ?? '')))
-      .catch(() => setMarkdownText(''))
-      .finally(() => setIsMarkdownLoading(false));
+      .then((res) => { if (isMounted.current) setMarkdownText(String(res.data?.markdown ?? '')) })
+      .catch((err) => { 
+        console.error('Failed to load markdown:', err);
+        if (isMounted.current) setMarkdownText(''); 
+      })
+      .finally(() => { if (isMounted.current) setIsMarkdownLoading(false) });
   }, [open, result?.markdown_path]);
 
   const downloadMarkdown = () => downloadText(`${String(result?.script_id || 'output')}.md`, markdownText || '', 'text/markdown;charset=utf-8;');
@@ -181,7 +223,7 @@ export function ResultDashboardView({
       a.remove();
       URL.revokeObjectURL(url);
     } finally {
-      setIsPackaging(false);
+      if (isMounted.current) setIsPackaging(false);
     }
   };
 
@@ -208,7 +250,7 @@ export function ResultDashboardView({
       a.remove();
       URL.revokeObjectURL(url);
     } finally {
-      setIsPackaging(false);
+      if (isMounted.current) setIsPackaging(false);
     }
   };
 
@@ -237,30 +279,26 @@ export function ResultDashboardView({
     XLSX.writeFile(wb, name);
   };
 
-  // C1 — Matrix data (locale ↔ slot) for the current kind, derived from ad_copy_matrix.variants
+  // C1 — Matrix data (locale ↔ slot) for the current kind, derived from adCopyTiles directly
   const matrixLocales: string[] = useMemo(() => {
-    const acm = result?.ad_copy_matrix as AnyObj | undefined;
-    if (!acm) return [];
-    const locs = Array.isArray((acm as any).locales) ? (acm as any).locales : null;
-    if (locs && locs.length) return locs.map((x: any) => String(x));
-    const def = (acm as any)?.default_locale;
-    return def ? [String(def)] : [];
-  }, [result]);
+    const locs = new Set<string>();
+    adCopyTiles.forEach((t: any) => locs.add(String(t?.locale || 'default')));
+    return Array.from(locs);
+  }, [adCopyTiles]);
 
   const matrixKindKey: 'headlines' | 'primary_texts' | 'hashtags' =
     matrixKind === 'headline' ? 'headlines' : matrixKind === 'primary_text' ? 'primary_texts' : 'hashtags';
 
   const matrixRows = useMemo(() => {
-    const acm = result?.ad_copy_matrix as AnyObj | undefined;
-    if (!acm || !matrixLocales.length) return [] as Array<{ idx: number; cells: Record<string, string> }>;
-    const variants = (acm as any).variants || {};
+    if (!matrixLocales.length) return [];
     const colArrays: Record<string, string[]> = {};
     let maxLen = 0;
     matrixLocales.forEach((loc) => {
-      const arr = Array.isArray(variants?.[loc]?.[matrixKindKey]) ? variants[loc][matrixKindKey] : [];
-      colArrays[loc] = arr.map((x: any) => String(x ?? ''));
+      const tiles = adCopyTiles.filter((t: any) => String(t?.locale || 'default') === loc && t.kind === matrixKind);
+      colArrays[loc] = tiles.map((t: any) => String(t?.text ?? ''));
       if (colArrays[loc].length > maxLen) maxLen = colArrays[loc].length;
     });
+    
     const rows: Array<{ idx: number; cells: Record<string, string> }> = [];
     for (let i = 0; i < maxLen; i += 1) {
       const cells: Record<string, string> = {};
@@ -272,10 +310,37 @@ export function ResultDashboardView({
     const q = matrixSearch.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((r) => Object.values(r.cells).some((txt) => txt.toLowerCase().includes(q)));
-  }, [result, matrixLocales, matrixKindKey, matrixSearch]);
+  }, [adCopyTiles, matrixLocales, matrixKind, matrixSearch]);
 
   const updateMatrixCell = (locale: string, idx: number, next: string) => {
-    if (!result?.ad_copy_matrix || !onResultUpdate) return;
+    if (!onResultUpdate || !result) return;
+    
+    // If it relies on flat tiles array
+    if (Array.isArray(result.ad_copy_tiles)) {
+      const nextTiles = [...result.ad_copy_tiles];
+      let matchingCount = 0;
+      let foundIndex = -1;
+      for (let i = 0; i < nextTiles.length; i++) {
+        const t = nextTiles[i];
+        if (String(t?.locale || 'default') === locale && t.kind === matrixKind) {
+          if (matchingCount === idx) {
+            foundIndex = i;
+            break;
+          }
+          matchingCount++;
+        }
+      }
+      if (foundIndex >= 0) {
+        nextTiles[foundIndex] = { ...nextTiles[foundIndex], text: next };
+      } else {
+        nextTiles.push({ id: `${locale}:${matrixKind}:${Date.now()}`, locale, kind: matrixKind, text: next });
+      }
+      onResultUpdate({ ...result, ad_copy_tiles: nextTiles });
+      return;
+    }
+
+    // If it relies on matrix variants
+    if (!result.ad_copy_matrix) return;
     const acm = result.ad_copy_matrix as AnyObj;
     const variants = { ...(acm.variants || {}) } as AnyObj;
     const locVariant = { ...(variants[locale] || {}) } as AnyObj;
@@ -330,95 +395,118 @@ export function ResultDashboardView({
     return <>{out}</>;
   };
 
+  const hasCopy = adCopyTiles.length > 0;
+  const showLeftPanel = !isCopyTask || !!result?.markdown_path;
+  const showRightPanel = isCopyTask || hasCopy;
+  const gridCols = (showLeftPanel && showRightPanel) ? 'lg:grid-cols-2' : 'lg:grid-cols-1';
+
   if (!open || !result) return null;
 
   return (
-    <div className="fixed inset-0 z-[200] bg-black/55 backdrop-blur-md flex items-center justify-center p-3 lg:p-6">
-      <div className="w-full max-w-[1400px] h-[88vh] bg-surface border border-outline-variant/40 rounded-2xl shadow-elev-2 overflow-hidden flex flex-col">
-        <div className="shrink-0 px-4 py-3 border-b border-outline-variant/30 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-[10px] uppercase font-bold tracking-widest text-on-surface-variant">{t('lab.dashboard.title')}</div>
-            <div className="text-[13px] font-black text-on-surface truncate">
-              {String(result?.script_id || 'OUTPUT')}
-              {result?.markdown_path ? <span className="ml-2 text-[10px] font-mono text-on-surface-variant">{String(result.markdown_path)}</span> : null}
+    <div className="fixed inset-0 z-[200] bg-black/40 backdrop-blur-sm flex items-center justify-center p-3 lg:p-6">
+      <div className="w-full max-w-[1400px] h-[88vh] bg-[#f8faf9] border border-[#e8ecea] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+        <div className="shrink-0 px-5 py-4 border-b border-[#e8ecea] bg-white flex items-center justify-between gap-4">
+          <div className="min-w-0 flex flex-col gap-0.5">
+            <div className="text-[12px] font-bold tracking-widest text-[#8a9891]">{t('lab.dashboard.title', '生成结果页')}</div>
+            <div className="text-[14px] font-black text-[#111827] truncate flex items-center gap-2">
+              OUTPUT
+              {result?.markdown_path ? <span className="text-[11px] font-mono text-[#8a9891] font-normal">{String(result.markdown_path)}</span> : null}
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0">
             {isPackaging && (
-              <div className="text-[10px] font-bold tracking-widest uppercase text-secondary flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
-                {t('lab.dashboard.packaging')}
+              <div className="text-[11px] font-bold tracking-widest uppercase text-[#3aa668] flex items-center gap-2 mr-2">
+                <span className="w-2 h-2 rounded-full bg-[#3aa668] animate-pulse" />
+                {t('lab.dashboard.packaging', 'PACKAGING')}
               </div>
             )}
-            <button type="button" onClick={downloadMarkdown} className="btn-director-secondary px-3 py-1.5 text-[11px] font-bold flex items-center gap-2">
-              <FileText className="w-4 h-4" /> {t('lab.dashboard.btn_markdown')}
+            {result?.script_id && (
+              <button 
+                type="button" 
+                onClick={markAsWinner} 
+                disabled={isMarkingWinner || markedWinner}
+                className={`px-3.5 py-1.5 text-[12px] font-bold flex items-center gap-2 rounded-lg transition-all ${
+                  markedWinner 
+                    ? 'bg-[#fef3c7] text-[#d97706] border border-[#fde68a] shadow-[0_2px_10px_rgba(245,158,11,0.1)]' 
+                    : 'bg-white border border-[#e8ecea] text-[#111827] hover:bg-[#fffbeb] hover:text-[#d97706] hover:border-[#fde68a] shadow-sm'
+                }`}
+              >
+                {isMarkingWinner ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trophy className="w-4 h-4" />}
+                {markedWinner ? t('lab.dashboard.winner_marked', 'WINNER') : t('lab.dashboard.mark_winner', 'MARK WINNER')}
+              </button>
+            )}
+            <button type="button" onClick={downloadMarkdown} className="bg-white border border-[#e8ecea] text-[#111827] px-3.5 py-1.5 rounded-lg text-[12px] font-bold flex items-center gap-2 shadow-sm hover:bg-[#f4f7f5] transition-colors">
+              <FileText className="w-4 h-4 text-[#3aa668]" /> {t('lab.dashboard.btn_markdown', 'Markdown')}
             </button>
             {result?.ad_copy_matrix && (
-              <button type="button" onClick={exportXlsx} className="btn-director-secondary px-3 py-1.5 text-[11px] font-bold flex items-center gap-2">
-                <Download className="w-4 h-4" /> {t('lab.dashboard.btn_xlsx')}
+              <button type="button" onClick={exportXlsx} className="bg-white border border-[#e8ecea] text-[#111827] px-3.5 py-1.5 rounded-lg text-[12px] font-bold flex items-center gap-2 shadow-sm hover:bg-[#f4f7f5] transition-colors">
+                <Download className="w-4 h-4 text-[#3aa668]" /> {t('lab.dashboard.btn_xlsx', 'XLSX')}
               </button>
             )}
             {Array.isArray((result as any).script) && (
-              <button type="button" onClick={exportPdf} className="btn-director-secondary px-3 py-1.5 text-[11px] font-bold flex items-center gap-2">
-                <Download className="w-4 h-4" /> {t('lab.dashboard.btn_pdf')}
+              <button type="button" onClick={exportPdf} className="bg-white border border-[#e8ecea] text-[#111827] px-3.5 py-1.5 rounded-lg text-[12px] font-bold flex items-center gap-2 shadow-sm hover:bg-[#f4f7f5] transition-colors">
+                <Download className="w-4 h-4 text-[#3aa668]" /> {t('lab.dashboard.btn_pdf', 'PDF')}
               </button>
             )}
-            <button type="button" onClick={exportDeliveryPack} className="btn-director-secondary px-3 py-1.5 text-[11px] font-bold flex items-center gap-2">
-              <Package className="w-4 h-4" /> {t('lab.dashboard.btn_delivery_pack') || 'Delivery Pack'}
+            <button type="button" onClick={exportDeliveryPack} className="bg-white border border-[#e8ecea] text-[#111827] px-3.5 py-1.5 rounded-lg text-[12px] font-bold flex items-center gap-2 shadow-sm hover:bg-[#f4f7f5] transition-colors">
+              <Package className="w-4 h-4 text-[#3aa668]" /> {t('lab.dashboard.btn_delivery_pack', '交付包')}
             </button>
-            <button type="button" onClick={openOutFolder} className="btn-director-secondary px-3 py-1.5 text-[11px] font-bold flex items-center gap-2">
-              <FolderOpen className="w-4 h-4" /> {t('lab.dashboard.btn_open_folder')}
+            <button type="button" onClick={openOutFolder} className="bg-white border border-[#e8ecea] text-[#111827] px-3.5 py-1.5 rounded-lg text-[12px] font-bold flex items-center gap-2 shadow-sm hover:bg-[#f4f7f5] transition-colors">
+              <FolderOpen className="w-4 h-4 text-[#3aa668]" /> {t('lab.dashboard.btn_open_folder', '打开文件夹')}
             </button>
-            <button type="button" onClick={onClose} className="rounded-lg px-2.5 py-2 border border-outline-variant/40 hover:bg-surface-container transition-colors" aria-label={t('lab.dashboard.close')}>
-              <X className="w-4 h-4 text-on-surface-variant" />
+            <button type="button" onClick={onClose} className="ml-2 rounded-lg p-2 bg-white border border-[#e8ecea] hover:bg-[#fee2e2] hover:text-red-600 hover:border-red-200 text-[#8a9891] transition-colors shadow-sm" aria-label={t('lab.dashboard.close')}>
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2">
-          <div className="min-h-0 border-b lg:border-b-0 lg:border-r border-outline-variant/25 flex flex-col">
-            <div className="shrink-0 px-4 py-2 border-b border-outline-variant/20 flex items-center justify-between">
-              <div className="text-[10px] font-black tracking-widest text-primary uppercase">{t('lab.dashboard.storyboard_viewer')}</div>
-              <button type="button" onClick={() => copyToClipboard(markdownText || '')} className="text-[10px] font-bold text-on-surface-variant hover:text-on-surface flex items-center gap-1.5">
-                <Copy className="w-3.5 h-3.5" /> {t('lab.dashboard.copy_markdown')}
-              </button>
+        <div className={`flex-1 min-h-0 grid grid-cols-1 ${gridCols}`}>
+          {showLeftPanel && (
+            <div className={`min-h-0 ${showRightPanel ? 'border-b lg:border-b-0 lg:border-r border-[#e8ecea]' : ''} bg-white flex flex-col`}>
+              <div className="shrink-0 px-5 py-3 border-b border-[#e8ecea] flex items-center justify-between">
+                <div className="text-[12px] font-bold tracking-widest text-[#3b82f6] uppercase">{t('lab.dashboard.storyboard_viewer', '分镜预览')}</div>
+                <button type="button" onClick={() => copyToClipboard(markdownText || '')} className="text-[11px] font-medium text-[#8a9891] hover:text-[#3b82f6] flex items-center gap-1.5 transition-colors">
+                  <Copy className="w-3.5 h-3.5" /> {t('lab.dashboard.copy_markdown', '复制 Markdown')}
+                </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5" style={{ scrollbarGutter: 'stable' }}>
+                {isMarkdownLoading ? (
+                  <div className="text-[13px] text-[#8a9891]">{t('lab.dashboard.loading_markdown', '加载 Markdown 中...')}</div>
+                ) : markdownText ? (
+                  <div className="prose prose-sm max-w-none prose-headings:tracking-tight prose-a:text-[#3b82f6] prose-headings:text-[#111827] prose-p:text-[#4b5563] prose-strong:text-[#111827] prose-li:text-[#4b5563]">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdownText}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <div className="text-[13px] text-[#8a9891]">{t('lab.dashboard.no_markdown', '暂无 Markdown 内容')}</div>
+                )}
+              </div>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4" style={{ scrollbarGutter: 'stable' }}>
-              {isMarkdownLoading ? (
-                <div className="text-[12px] text-on-surface-variant">{t('lab.dashboard.loading_markdown')}</div>
-              ) : markdownText ? (
-                <div className="prose prose-sm max-w-none prose-headings:tracking-tight prose-a:text-primary">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdownText}</ReactMarkdown>
-                </div>
-              ) : (
-                <div className="text-[12px] text-on-surface-variant">{t('lab.dashboard.no_markdown')}</div>
-              )}
-            </div>
-          </div>
+          )}
 
-          <div className="min-h-0 flex flex-col">
-            <div className="shrink-0 px-4 py-2 border-b border-outline-variant/20 flex items-center justify-between gap-3 flex-wrap">
-              <div className="flex items-center gap-3">
-                <div className="text-[10px] font-black tracking-widest text-secondary uppercase">{t('lab.dashboard.ad_copy_hub')}</div>
+          {showRightPanel && (
+            <div className="min-h-0 flex flex-col bg-[#f8faf9]">
+            <div className="shrink-0 px-5 py-3 border-b border-[#e8ecea] flex items-center justify-between gap-4 flex-wrap bg-white">
+              <div className="flex items-center gap-4">
+                <div className="text-[12px] font-bold tracking-widest text-[#3aa668] uppercase">{t('lab.dashboard.ad_copy_hub', '文案锚点集')}</div>
                 {result?.ad_copy_matrix && (
-                  <div className="inline-flex items-center rounded-full border border-outline-variant/40 bg-surface-container-low p-0.5">
+                  <div className="inline-flex items-center rounded-lg border border-[#e8ecea] bg-[#f4f7f5] p-0.5">
                     <button
                       type="button"
                       onClick={() => setCopyView('cards')}
-                      className={`px-2 py-1 rounded-full text-[10px] font-bold flex items-center gap-1.5 transition-colors ${
-                        copyView === 'cards' ? 'bg-secondary/15 text-secondary' : 'text-on-surface-variant hover:text-on-surface'
+                      className={`px-3 py-1 rounded-md text-[11px] font-bold flex items-center gap-1.5 transition-colors ${
+                        copyView === 'cards' ? 'bg-white text-[#3aa668] shadow-sm' : 'text-[#8a9891] hover:text-[#111827]'
                       }`}
                     >
-                      <LayoutGrid className="w-3 h-3" /> {t('lab.dashboard.view_cards') || 'Cards'}
+                      <LayoutGrid className="w-3.5 h-3.5" /> {t('lab.dashboard.view_cards', '卡片视图')}
                     </button>
                     <button
                       type="button"
                       onClick={() => setCopyView('matrix')}
-                      className={`px-2 py-1 rounded-full text-[10px] font-bold flex items-center gap-1.5 transition-colors ${
-                        copyView === 'matrix' ? 'bg-secondary/15 text-secondary' : 'text-on-surface-variant hover:text-on-surface'
+                      className={`px-3 py-1 rounded-md text-[11px] font-bold flex items-center gap-1.5 transition-colors ${
+                        copyView === 'matrix' ? 'bg-white text-[#3aa668] shadow-sm' : 'text-[#8a9891] hover:text-[#111827]'
                       }`}
                     >
-                      <Table2 className="w-3 h-3" /> {t('lab.dashboard.view_matrix') || 'Matrix'}
+                      <Table2 className="w-3.5 h-3.5" /> {t('lab.dashboard.view_matrix', '矩阵视图')}
                     </button>
                   </div>
                 )}
@@ -427,12 +515,12 @@ export function ResultDashboardView({
                 <button
                   type="button"
                   onClick={() => setComplianceOpen(true)}
-                  className={`text-[10px] font-bold flex items-center gap-1.5 rounded-full px-2 py-1 border transition-colors ${
+                  className={`text-[11px] font-bold flex items-center gap-1.5 rounded-full px-3 py-1 border transition-colors ${
                     compliance?.risk_level === 'block'
-                      ? 'text-red-700 border-red-200 bg-red-50 hover:bg-red-100/70'
+                      ? 'text-red-700 border-red-200 bg-red-50 hover:bg-red-100'
                       : compliance?.risk_level === 'warn'
-                        ? 'text-amber-700 border-amber-200 bg-amber-50 hover:bg-amber-100/70'
-                        : 'text-emerald-700 border-emerald-200 bg-emerald-50 hover:bg-emerald-100/70'
+                        ? 'text-amber-700 border-amber-200 bg-amber-50 hover:bg-amber-100'
+                        : 'text-emerald-700 border-emerald-200 bg-emerald-50 hover:bg-emerald-100'
                   }`}
                   title={t('lab.compliance.open')}
                 >
@@ -441,17 +529,17 @@ export function ResultDashboardView({
                 </button>
               )}
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-4" style={{ scrollbarGutter: 'stable' }}>
+            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 space-y-5" style={{ scrollbarGutter: 'stable' }}>
               {partialFailure && (
-                <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 flex items-start gap-2">
+                <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-2 shadow-sm">
                   <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                  <div className="text-[11px] text-amber-800 font-semibold leading-relaxed">
-                    {t('lab.dashboard.partial_failure_banner') || 'Some regions failed to generate. Retry individually below.'}
-                    <div className="mt-1 flex flex-wrap gap-1.5">
+                  <div className="text-[12px] text-amber-800 font-semibold leading-relaxed">
+                    {t('lab.dashboard.partial_failure_banner', '部分区域生成失败，请在下方单独重试。')}
+                    <div className="mt-2 flex flex-wrap gap-2">
                       {Object.entries(regionStatuses).map(([rid, status]) => (
                         <span
                           key={rid}
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                          className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
                             status === 'ok'
                               ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
                               : status === 'fallback'
@@ -467,64 +555,64 @@ export function ResultDashboardView({
                 </div>
               )}
               {copyView === 'matrix' && result?.ad_copy_matrix ? (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <div className="inline-flex items-center rounded-full border border-outline-variant/40 bg-surface-container-low p-0.5">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="inline-flex items-center rounded-lg border border-[#e8ecea] bg-white p-0.5 shadow-sm">
                       {(['headline', 'primary_text', 'hashtag'] as const).map((k) => (
                         <button
                           key={k}
                           type="button"
                           onClick={() => setMatrixKind(k)}
-                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                            matrixKind === k ? 'bg-primary/15 text-primary' : 'text-on-surface-variant hover:text-on-surface'
+                          className={`px-3 py-1.5 rounded-md text-[11px] font-bold uppercase tracking-widest transition-colors ${
+                            matrixKind === k ? 'bg-[#3aa668] text-white' : 'text-[#8a9891] hover:text-[#111827] hover:bg-[#f4f7f5]'
                           }`}
                         >
                           {k === 'headline'
-                            ? t('lab.dashboard.headlines')
+                            ? t('lab.dashboard.headlines', '短文案 (Headline)')
                             : k === 'primary_text'
-                            ? t('lab.dashboard.primary_texts')
-                            : t('lab.dashboard.hashtags')}
+                            ? t('lab.dashboard.primary_texts', '长文案 (Primary Text)')
+                            : t('lab.dashboard.hashtags', '标签 (Hashtag)')}
                         </button>
                       ))}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1.5 rounded-full border border-outline-variant/40 bg-surface-container-low px-2 py-1 text-[11px]">
-                        <Search className="w-3.5 h-3.5 text-on-surface-variant" />
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 rounded-lg border border-[#e8ecea] bg-white px-3 py-1.5 text-[12px] shadow-sm">
+                        <Search className="w-4 h-4 text-[#8a9891]" />
                         <input
                           type="text"
                           value={matrixSearch}
                           onChange={(e) => setMatrixSearch(e.target.value)}
-                          placeholder={t('lab.dashboard.matrix_search_placeholder') || 'Search...'}
-                          className="bg-transparent outline-none w-36 text-on-surface placeholder:text-on-surface-variant"
+                          placeholder={t('lab.dashboard.matrix_search_placeholder', '搜索矩阵内容...')}
+                          className="bg-transparent outline-none w-40 text-[#111827] placeholder:text-[#8a9891]"
                         />
                       </div>
                       <button
                         type="button"
                         onClick={exportMatrixCsv}
                         disabled={!matrixLocales.length || !matrixRows.length}
-                        className="btn-director-secondary px-2.5 py-1 text-[10px] font-bold flex items-center gap-1.5 disabled:opacity-50"
+                        className="bg-white border border-[#e8ecea] hover:bg-[#f4f7f5] text-[#111827] px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50 shadow-sm"
                       >
-                        <Download className="w-3.5 h-3.5" /> {t('lab.dashboard.btn_csv') || 'CSV'}
+                        <Download className="w-3.5 h-3.5 text-[#3aa668]" /> {t('lab.dashboard.btn_csv', 'CSV')}
                       </button>
                     </div>
                   </div>
                   {matrixLocales.length === 0 ? (
-                    <div className="text-[12px] text-on-surface-variant">{t('lab.dashboard.no_tiles')}</div>
+                    <div className="text-[13px] text-[#8a9891]">{t('lab.dashboard.no_tiles')}</div>
                   ) : (
-                    <div className="overflow-x-auto rounded-xl border border-outline-variant/30 bg-surface-container-lowest">
-                      <table className="min-w-full text-[12px] border-collapse">
+                    <div className="overflow-x-auto rounded-xl border border-[#e8ecea] bg-white shadow-sm">
+                      <table className="min-w-full text-[13px] border-collapse">
                         <thead>
-                          <tr className="bg-surface-container-high/60">
-                            <th className="text-left px-2 py-1.5 text-[10px] font-black uppercase tracking-widest text-on-surface-variant border-b border-outline-variant/30 sticky left-0 bg-surface-container-high z-[1]">#</th>
+                          <tr className="bg-[#f8faf9]">
+                            <th className="text-left px-3 py-2.5 text-[11px] font-black uppercase tracking-widest text-[#8a9891] border-b border-[#e8ecea] sticky left-0 bg-[#f8faf9] z-[1]">#</th>
                             {matrixLocales.map((loc) => {
                               const rp = loc.includes(':') ? loc.split(':', 2)[0] : '';
                               const rs = rp ? regionStatuses[rp] : '';
                               return (
-                                <th key={loc} className="text-left px-2 py-1.5 text-[10px] font-black uppercase tracking-widest text-on-surface-variant border-b border-outline-variant/30 whitespace-nowrap">
-                                  <div className="flex items-center gap-1.5">
+                                <th key={loc} className="text-left px-3 py-2.5 text-[11px] font-black uppercase tracking-widest text-[#8a9891] border-b border-[#e8ecea] whitespace-nowrap">
+                                  <div className="flex items-center gap-2">
                                     <span className="truncate max-w-[200px]" title={loc}>{loc}</span>
                                     {rs && rs !== 'ok' && (
-                                      <span className="text-[8px] font-bold px-1 py-0.5 rounded-full text-red-700 bg-red-50 border border-red-300">
+                                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full text-red-700 bg-red-50 border border-red-300">
                                         {String(rs).toUpperCase()}
                                       </span>
                                     )}
@@ -537,23 +625,23 @@ export function ResultDashboardView({
                         <tbody>
                           {matrixRows.length === 0 ? (
                             <tr>
-                              <td colSpan={matrixLocales.length + 1} className="px-2 py-4 text-center text-on-surface-variant">
-                                {t('lab.dashboard.matrix_empty') || 'No matches.'}
+                              <td colSpan={matrixLocales.length + 1} className="px-3 py-6 text-center text-[#8a9891]">
+                                {t('lab.dashboard.matrix_empty', '未找到匹配内容。')}
                               </td>
                             </tr>
                           ) : (
                             matrixRows.map((row) => (
-                              <tr key={row.idx} className="hover:bg-surface-container-high/30">
-                                <td className="align-top px-2 py-1.5 text-[10px] font-mono text-on-surface-variant border-b border-outline-variant/20 sticky left-0 bg-surface-container-lowest">
+                              <tr key={row.idx} className="hover:bg-[#f4f7f5] transition-colors">
+                                <td className="align-top px-3 py-2 text-[11px] font-mono text-[#8a9891] border-b border-[#e8ecea] sticky left-0 bg-white">
                                   {row.idx + 1}
                                 </td>
                                 {matrixLocales.map((loc) => (
-                                  <td key={loc} className="align-top px-2 py-1 border-b border-outline-variant/20 min-w-[200px]">
+                                  <td key={loc} className="align-top px-3 py-1.5 border-b border-[#e8ecea] min-w-[240px]">
                                     <textarea
                                       value={row.cells[loc] ?? ''}
                                       onChange={(e) => updateMatrixCell(loc, row.idx, e.target.value)}
                                       rows={Math.max(1, Math.min(4, Math.ceil(((row.cells[loc] ?? '').length || 1) / 40)))}
-                                      className="w-full bg-transparent outline-none text-[12px] text-on-surface resize-y py-1 px-1.5 rounded-lg border border-transparent hover:border-outline-variant/30 focus:border-primary/60 focus:bg-surface transition-colors"
+                                      className="w-full bg-transparent outline-none text-[13px] text-[#111827] resize-y py-1.5 px-2 rounded-lg border border-transparent hover:border-[#d1d9d5] focus:border-[#3aa668] focus:bg-[#f8faf9] transition-all"
                                     />
                                   </td>
                                 ))}
@@ -573,7 +661,7 @@ export function ResultDashboardView({
                   byLocale[loc].push(t);
                 });
                 const locales = Object.keys(byLocale);
-                if (locales.length === 0) return <div className="text-[12px] text-on-surface-variant">{t('lab.dashboard.no_tiles')}</div>;
+                if (locales.length === 0) return <div className="text-[13px] text-[#a3a3a3]">{t('lab.dashboard.no_tiles', '暂无文案片段')}</div>;
                 return locales.map((loc) => {
                   const tiles = byLocale[loc] || [];
                   const headlines = tiles.filter((x) => x.kind === 'headline').slice(0, 50);
@@ -587,23 +675,23 @@ export function ResultDashboardView({
                   return (
                     <div
                       key={loc}
-                      className={`rounded-2xl p-3 border ${
+                      className={`rounded-2xl p-4 border shadow-sm ${
                         needsRetry
-                          ? 'bg-red-50/40 border-red-300'
-                          : 'bg-surface-container-lowest border-outline-variant/35'
+                          ? 'bg-red-50/50 border-red-200'
+                          : 'bg-white border-[#e8ecea]'
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-2 gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div className="text-[10px] font-black tracking-widest text-on-surface-variant uppercase truncate">{loc}</div>
+                      <div className="flex items-center justify-between mb-4 gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="text-[11px] font-black tracking-widest text-[#8a9891] uppercase truncate">{loc}</div>
                           {regionStatus && (
                             <span
-                              className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
+                              className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${
                                 regionStatus === 'ok'
                                   ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
                                   : regionStatus === 'fallback'
-                                  ? 'text-amber-700 bg-amber-50 border-amber-300'
-                                  : 'text-red-700 bg-red-50 border-red-300'
+                                  ? 'text-amber-700 bg-amber-50 border-amber-200'
+                                  : 'text-red-700 bg-red-50 border-red-200'
                               }`}
                               title={regionErr || ''}
                             >
@@ -611,17 +699,17 @@ export function ResultDashboardView({
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-3 shrink-0">
                           {needsRetry && regionPart && (
                             <button
                               type="button"
                               onClick={() => retryRegion(regionPart)}
                               disabled={retryingRegion === regionPart}
-                              className="text-[10px] font-bold text-red-700 hover:text-red-900 flex items-center gap-1.5 disabled:opacity-60"
+                              className="text-[11px] font-bold text-red-600 hover:text-red-800 flex items-center gap-1.5 disabled:opacity-60 transition-colors"
                               title={regionErr || ''}
                             >
                               <RefreshCw className={`w-3.5 h-3.5 ${retryingRegion === regionPart ? 'animate-spin' : ''}`} />
-                              {t('lab.dashboard.retry_region') || 'Retry region'}
+                              {t('lab.dashboard.retry_region', '重试区域')}
                             </button>
                           )}
                           <button
@@ -631,28 +719,28 @@ export function ResultDashboardView({
                                 [...headlines.map((h: any) => String(h.text || '')), '', ...primary.map((p: any) => String(p.text || '')), '', hashtags.map((h: any) => String(h.text || '')).join(' ')].join('\n'),
                               )
                             }
-                            className="text-[10px] font-bold text-on-surface-variant hover:text-on-surface flex items-center gap-1.5"
+                            className="text-[11px] font-bold text-[#8a9891] hover:text-[#111827] flex items-center gap-1.5 transition-colors"
                           >
-                            <Copy className="w-3.5 h-3.5" /> {t('lab.dashboard.copy_all')}
+                            <Copy className="w-3.5 h-3.5" /> {t('lab.dashboard.copy_all', '一键复制')}
                           </button>
                         </div>
                       </div>
-                      <div className="grid grid-cols-1 gap-3">
+                      <div className="grid grid-cols-1 gap-4">
                         {headlines.length > 0 && (
                           <div>
-                            <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-2">{t('lab.dashboard.headlines')}</div>
+                            <div className="text-[11px] font-bold text-[#8a9891] uppercase tracking-widest mb-2.5">{t('lab.dashboard.headlines', '短文案 (Headline)')}</div>
                             <div className="space-y-2">
                               {headlines.map((h: any) => {
                                 const risky = riskyTileIds.has(String(h?.id || ''));
                                 return (
                                   <div
                                     key={String(h.id)}
-                                    className={`rounded-xl border px-3 py-2 text-[12px] text-on-surface flex items-start justify-between gap-2 ${
-                                      risky ? 'border-red-400 bg-red-50/70' : 'border-outline-variant/30 bg-surface-container-high'
+                                    className={`rounded-xl border px-4 py-2.5 text-[13px] font-medium text-[#111827] flex items-start justify-between gap-3 shadow-sm transition-colors ${
+                                      risky ? 'border-red-300 bg-red-50' : 'border-[#e8ecea] bg-white hover:border-[#d1d9d5]'
                                     }`}
                                   >
                                     <div className="min-w-0 flex-1 leading-relaxed">{String(h.text || '')}</div>
-                                    <button type="button" onClick={() => copyToClipboard(String(h.text || ''))} className="shrink-0 text-on-surface-variant hover:text-on-surface">
+                                    <button type="button" onClick={() => copyToClipboard(String(h.text || ''))} className="shrink-0 text-[#8a9891] hover:text-[#3aa668] transition-colors mt-0.5">
                                       <Copy className="w-4 h-4" />
                                     </button>
                                   </div>
@@ -663,19 +751,19 @@ export function ResultDashboardView({
                         )}
                         {primary.length > 0 && (
                           <div>
-                            <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-2">{t('lab.dashboard.primary_texts')}</div>
+                            <div className="text-[11px] font-bold text-[#8a9891] uppercase tracking-widest mb-2.5">{t('lab.dashboard.primary_texts', '长文案 (Primary Text)')}</div>
                             <div className="space-y-2">
                               {primary.map((p: any) => {
                                 const risky = riskyTileIds.has(String(p?.id || ''));
                                 return (
                                   <div
                                     key={String(p.id)}
-                                    className={`rounded-xl border px-3 py-2 text-[11px] text-on-surface-variant flex items-start justify-between gap-2 ${
-                                      risky ? 'border-red-400 bg-red-50/70' : 'border-outline-variant/30 bg-surface-container-high'
+                                    className={`rounded-xl border px-4 py-2.5 text-[12px] font-medium text-[#4b5563] flex items-start justify-between gap-3 shadow-sm transition-colors ${
+                                      risky ? 'border-red-300 bg-red-50' : 'border-transparent bg-[#f4f7f5] hover:border-[#e8ecea]'
                                     }`}
                                   >
                                     <div className="min-w-0 flex-1 leading-relaxed whitespace-pre-wrap">{String(p.text || '')}</div>
-                                    <button type="button" onClick={() => copyToClipboard(String(p.text || ''))} className="shrink-0 text-on-surface-variant hover:text-on-surface">
+                                    <button type="button" onClick={() => copyToClipboard(String(p.text || ''))} className="shrink-0 text-[#8a9891] hover:text-[#3aa668] transition-colors mt-0.5">
                                       <Copy className="w-4 h-4" />
                                     </button>
                                   </div>
@@ -686,10 +774,10 @@ export function ResultDashboardView({
                         )}
                         {hashtags.length > 0 && (
                           <div>
-                            <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-2">{t('lab.dashboard.hashtags')}</div>
-                            <div className="rounded-xl border border-outline-variant/30 bg-surface-container-high px-3 py-2 text-[10px] font-mono text-on-surface-variant break-words flex items-start justify-between gap-2">
-                              <div className="min-w-0 flex-1">{hashtags.map((h: any) => String(h.text || '')).join(' ')}</div>
-                              <button type="button" onClick={() => copyToClipboard(hashtags.map((h: any) => String(h.text || '')).join(' '))} className="shrink-0 text-on-surface-variant hover:text-on-surface">
+                            <div className="text-[11px] font-bold text-[#8a9891] uppercase tracking-widest mb-2.5">{t('lab.dashboard.hashtags', '标签 (Hashtag)')}</div>
+                            <div className="rounded-xl border border-transparent bg-[#f4f7f5] px-4 py-2.5 text-[11px] font-mono text-[#6b7571] break-words flex items-start justify-between gap-3 shadow-sm">
+                              <div className="min-w-0 flex-1 leading-relaxed">{hashtags.map((h: any) => String(h.text || '')).join(' ')}</div>
+                              <button type="button" onClick={() => copyToClipboard(hashtags.map((h: any) => String(h.text || '')).join(' '))} className="shrink-0 text-[#8a9891] hover:text-[#3aa668] transition-colors mt-0.5">
                                 <Copy className="w-4 h-4" />
                               </button>
                             </div>
@@ -702,6 +790,7 @@ export function ResultDashboardView({
               })()}
             </div>
           </div>
+          )}
         </div>
 
         <AnimatePresence>

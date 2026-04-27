@@ -1,0 +1,12 @@
+# Local / ad-hoc captures (never commit)
+_pytest_out.txt
+pytest_out*.txt
+
+# Local logs
+*.log
+
+# Secrets & DB
+.secret_key
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

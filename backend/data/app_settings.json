@@ -1,1 +1,1 @@
-{"default_provider_id": "bailian"}
+{"default_provider_id": "deepseek", "fallback_providers": ["siliconflow", "openrouter"]}

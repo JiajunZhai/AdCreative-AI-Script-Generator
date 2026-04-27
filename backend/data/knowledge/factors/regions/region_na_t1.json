@@ -1,0 +1,42 @@
+{
+    "name": "北美",
+    "short_name": "NA",
+    "description": "Core user acquisition factors targeting high net worth, high LTV users in T1 North American countries (US, Canada). This group has strong 'ad immunity' and 'instant gratification' tendencies. Ad strategy must revolve around 'instant dopamine stimulation', 'high visual contrast', and 'low understanding threshold', pursuing extreme Day 1 ROAS conversion.",
+    "language": "English (US)",
+    "focus": [
+        "Golden 1.5 seconds decide life or death: the opening must directly show the 'most satisfying moment' or 'extremely stupid failure', eliminating all logo displays, setups, and lengthy tutorials.",
+        "Visual Hierarchy strike: core game elements must be 30% larger than normal; damage numbers and coin explosion effects must occupy the absolute center of the screen, with screen shake effects.",
+        "UI Safe Zone adaptation: key information and CTA must strictly avoid the right-side like bar and bottom caption area of TikTok/Reels/Shorts to prevent accidental touch and bounce.",
+        "Animation and positive feedback loop: every click or merge must be accompanied by exaggerated visual particle effects and high-frequency ASMR sounds (e.g., coin drops, crisp explosions), establishing a strong dopamine loop."
+    ],
+    "rules": [
+        "Voiceover mandatory standard: must use accentless authentic North American native speaker voiceover, or directly adopt currently popular TikTok/ElevenLabs AI voices (e.g., classic humorous male voice or sharp female voice).",
+        "Art mandatory replacement: completely remove Eastern elements like xianxia, wuxia, Three Kingdoms. Replace with: Western cartoon (Toon Blast style), American realistic fantasy, or minimalist stick figure/rubber figure style.",
+        "Subtitle and font standards: subtitles must use highly impactful sans-serif bold (Burbank, Arial Black, Impact) with black outline or bright color background block; single line no more than 5 words, with text popping out word by word in sync with voice.",
+        "Color psychology usage: success/upgrade use bright neon green, failure/warning use bright red, maximize contrast; no need for whitespace elegance, just grab attention at a glance."
+    ],
+    "constraints": [
+        "Absolutely no Chinese characters allowed (including but not limited to: corners of game UI, background walls, decorative text on clothes); conversion rate drops by half if any appear.",
+        "Absolutely no misspelled English or Chinglish; all copy must be localized by a native speaker or advanced AI.",
+        "Absolutely no misleading ads leading to platform bans: although 'secondary gameplay user acquisition' is allowed, the ad must contain at least 20% real game elements to avoid triggering the false advertising red lines of Meta/Google.",
+        "Absolutely no slow transitions: nobody watches fade in/out; all must be hard cuts, with rhythm switching every 1.5-2 seconds."
+    ],
+    "culture_notes": [
+        "Privacy and Compliance: absolutely avoid anything like 'We know where you are' or hints of requesting permissions; North American audiences are extremely sensitive to this.",
+        "Political Correctness and Diversity (DEI): if real or human-like characters appear, they must include multiple ethnicities (African American, Latino, etc.), avoid single white image, avoid stereotypes, otherwise it easily leads to negative reviews or even platform throttling.",
+        "Internet Memes and Meme Culture: keep up with current short video memes. Use abbreviations and local slang (e.g., POV, fr fr, no cap, legit, rent-free, math is not mathing).",
+        "Anti-hustle Mentality: emphasize 'Relax', 'Anti-stress', 'Kill time'; avoid emphasizing grind or hardcore competition; North American casual players buy games to escape reality, not to find a second job."
+    ],
+    "creative_hooks": [
+        "Rage Bait: deliberately show extremely stupid operations leading to Game Over, with copy 'Why is this so hard?! 😭' to trigger users' superiority feeling of 'let me do it'.",
+        "Competitiveness/IQ Challenge: 'Only 1% can reach Pink Color' or 'My Mom 🤓 vs My Dad 🤡', using competitiveness to create click impulse.",
+        "Oddly Satisfying/ASMR: show extremely smooth cleaning, harvesting, sorting processes to satisfy users' psychological OCD and sense of order.",
+        "Fake UGC/Real Immersion: record from a first-person perspective on TikTok holding a phone, with a real person's face (preferably exaggerated reactions), or use typical TikTok AI female voice announcing 'POV: You found the best game...'."
+    ],
+    "id": "region_na_t1",
+    "_metadata": {
+        "category": "regions",
+        "exported_at": "2026-04-23T02:42:10.720Z",
+        "version": "1.0"
+    }
+}

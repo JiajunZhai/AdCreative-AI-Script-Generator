@@ -92,7 +92,9 @@ def _load() -> dict[str, int | str]:
 
 def _save(data: dict[str, int | str]) -> None:
     _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _STATE_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp_path = _STATE_PATH.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp_path.replace(_STATE_PATH)
 
 
 def _resolve_tokens(measured: int | None, fallback: int) -> tuple[int, str]:

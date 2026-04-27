@@ -18,8 +18,9 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -68,11 +69,17 @@ def connect(db_path: Optional[Path | str] = None) -> sqlite3.Connection:
     """
     path = Path(db_path) if db_path else _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
+    conn = sqlite3.connect(
+        str(path),
+        timeout=30.0,
+        check_same_thread=False,
+        isolation_level=None
+    )
     conn.row_factory = sqlite3.Row
     # WAL + FK + sensible sync for local SSD workloads.
     try:
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
     except sqlite3.OperationalError:
         # In-memory or shared-cache DBs may reject WAL; ignore.
         pass
@@ -232,6 +239,64 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """
     ),
+    (
+        6,
+        """
+        ALTER TABLE knowledge_docs ADD COLUMN status TEXT DEFAULT 'active';
+        """
+    ),
+    (
+        7,
+        """
+        ALTER TABLE factors ADD COLUMN archived_at TEXT;
+        ALTER TABLE compliance_rules ADD COLUMN archived_at TEXT;
+        CREATE INDEX IF NOT EXISTS idx_knowledge_status_category ON knowledge_docs(status, category);
+        """
+    ),
+    (
+        8,
+        """
+        ALTER TABLE history_log ADD COLUMN is_winner INTEGER DEFAULT 0;
+        ALTER TABLE history_log ADD COLUMN performance_stats TEXT;
+        """
+    ),
+    (
+        9,
+        """
+        ALTER TABLE knowledge_docs ADD COLUMN language TEXT;
+        """
+    ),
+    (
+        10,
+        """
+        ALTER TABLE provider_settings ADD COLUMN last_compliance_score INTEGER;
+        ALTER TABLE provider_settings ADD COLUMN last_compliance_at TEXT;
+        """
+    ),
+    (
+        11,
+        """
+        CREATE TABLE IF NOT EXISTS presets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            pinned INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS job_queue (
+            id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            error TEXT,
+            script_id TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    ),
 ]
 
 
@@ -354,3 +419,18 @@ def fetchone(sql: str, params: Iterable[Any] | None = None) -> Optional[sqlite3.
 
 def fetchall(sql: str, params: Iterable[Any] | None = None) -> list[sqlite3.Row]:
     return list(execute(sql, params).fetchall())
+
+
+@contextmanager
+def transaction() -> Iterator[sqlite3.Connection]:
+    """Provide an explicit transaction for high-concurrency grouped writes.
+    Since we use isolation_level=None (autocommit), we manually BEGIN IMMEDIATE.
+    """
+    conn = get_conn()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise

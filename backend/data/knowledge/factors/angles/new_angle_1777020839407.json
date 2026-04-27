@@ -1,0 +1,30 @@
+{
+    "name": "阶级逆袭与权利反杀模型",
+    "short_name": "逆袭反杀",
+    "description": "Based on 'social comparison theory' and 'compensatory consumption psychology'. By showcasing the visual conflict of the protagonist suffering extreme injustice (being laid off, cheated on, humiliated), then achieving 'instant wealth' or 'power inflation' through game mechanics, it precisely targets users' inner repression and provides an outlet for catharsis.",
+    "focus": [
+        "Rapid identity switch: Within the first 0.5 seconds, the protagonist must enter the 'worst state' (begging, thrown out of the house, tattered clothes), then show the 'visual transformation' after clicking (instant costume change, luxury cars, even commanding an army).",
+        "Quantified contrast: There must be a dynamically changing 'status value' or 'asset value' at the top of the screen, starting from negative or zero and jumping exponentially, enhancing the sensory impact of the 'turnaround'.",
+        "Villain's 'ridiculous' failure: The NPCs who once humiliated the protagonist (boss, arrogant ex) must show extreme shock, kneeling, or misery at the end, completing the user's psychological revenge loop."
+    ],
+    "rules": [
+        "No steady growth: The growth process must be 'cheat-like', e.g., clicking the ground causes gold to grow. This surreal satisfaction is key for conversion.",
+        "Color emotionalization: Use gray/cool tones during failure/humiliation, and instantly switch to high-saturation, golden warm tones after reversal, using visual physiological reactions to enhance dopamine secretion.",
+        "Simple choice branches: At key reversal points, give two options (e.g., buy the company / forgive the boss). Either choice should show satisfaction, creating an illusion of 'global control' for the user."
+    ],
+    "constraints": [
+        "Absolutely avoid overly long plot buildup: Japanese and Brazilian users have no patience for foreplay; within 3 seconds, it must transition from 'miserable' to 'thrilling'.",
+        "No vague feedback: The reward after reversal must be tangible (e.g., mountains of gold coins, surrounded by beauties/heroes), not just an abstract level number."
+    ],
+    "core_emotion": "The thrill of revenge, pride of class crossing, and the sense of control from having nothing to everything",
+    "visual_tempo": "First 3 seconds: extreme oppression (cold colors, slow motion, mournful music) -> 3-10 seconds: frantic clicking (bright colors, full-screen effects, extreme speed) -> 12 seconds: big reversal at the end",
+    "logic_steps": [
+        "Hook (0-3s): Moment of humiliation. The protagonist is kicked out of the house or scolded by the boss, with the tag 'Poor' or 'Loser' on screen.",
+        "Build-up (3-7s): Unexpected fortune/system activation. The protagonist picks up divine gear in the trash or wins 3000 consecutive draws, with appearance starting to flash and change.",
+        "Climax (7-12s): Power domination. The protagonist returns to the original scene, and through simple synthesis or clicking, instantly destroys the villain or confiscates all their property.",
+        "CTA (12s+): Identity induction. Copy: 'Can you become a CEO in 3 minutes?' or 'Click to start your revenge path.'"
+    ],
+    "audio_strategy": "The opening uses a desolate erhu or deep cello, then switches to a highly rhythmic Funk or heavy metal at the moment of reversal, accompanied by intensive coin deposit sounds (Cha-ching!).",
+    "id": "new_angle_1777020839407",
+    "category": "angles"
+}

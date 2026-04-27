@@ -1,0 +1,47 @@
+{
+    "name": "TikTok Minis",
+    "short_name": "TikTok Minis",
+    "description": "User acquisition strategy for TikTok's extremely fragmented and highly algorithm-driven vertical screen ecosystem. Core essence is 'anti-ad camouflage' (Camouflage Marketing), high-frequency stimulation, and addictive sound effects. By creating 'visual emergency stops' and 'seamless loop' mechanisms, trick the system into over 100% completion rate, squeezing the super traffic pool.",
+    "focus": [
+        "Golden 0.5-second visual scroll-stopper: The opening must use highly impactful/curious visuals (e.g., giant objects, weirdly satisfying, extremely stupid actions) or strong human emotions (laughter/scream/rant) directly in the face, thoroughly interrupting the user's mindless scrolling muscle memory.",
+        "Emotional audio-visual synergy mechanism: Not only must follow TikTok trending BGM (Trending Sounds), but also combine addictive AI voice (native Text-to-Speech) and high-frequency ASMR sound effects (e.g., crisp coin sounds, synthetic explosion sounds) to establish a dopamine feedback loop.",
+        "Disguised CTA and seamless loop closure: The ending must avoid blunt 'click to download'. Must use provocative phrases like 'Can you beat level 10? Try the bottom left corner', and the last frame of the video must perfectly connect with the first frame, creating an infinite loop to trick algorithm promotion."
+    ],
+    "rules": [
+        "Safe zone and aspect ratio iron law: 1080x1920 (9:16) absolute full screen. Core actions and text stickers must be strictly within TikTok's official 'Safe Zone', avoiding occlusion from the right-side like button, bottom description area, and bottom music wheel.",
+        "Native disguise: Force introduction of TikTok native visual elements within the first 3 seconds, such as classic 'Reply to comment' popup disguise, Green Screen, or Duet/Split Screen, greatly reducing user alertness to hard ads.",
+        "Extreme compression rhythm: Mini-game material duration strictly controlled between 11 seconds and 18 seconds. Visuals must maintain an extremely excited rhythm, with a hard cut every 1~1.5 seconds. Absolutely no static shots or slow-paced buildup exceeding 2 seconds."
+    ],
+    "constraints": [
+        "Absolutely prohibit the lazy approach of converting landscape to portrait: strictly forbid using 'top and bottom black bars' or 'top and bottom Gaussian blur fill' (Letterboxing) to fake portrait mode. This will be directly judged as low-quality material by TikTok's machine vision and result in shadowbanning.",
+        "Absolutely prohibit refined 'traditional ad feel': strictly forbid using CG-level high-quality cinematic editing. Must deliberately retain or even create 'rough native feel' (e.g., phone screen recording feel, slight handheld shake, amateur breathing sounds/noises).",
+        "Absolutely prohibit material flaws that break the window effect: strictly forbid reposting materials with watermarks from competing platforms such as Kuaishou, Douyin, Instagram. Absolutely forbid any Chinese characters or non-target language text remaining on the edges of the screen when advertising on overseas TikTok."
+    ],
+    "specs": {
+        "aspect_ratio": "9:16",
+        "duration": "11-18s",
+        "safe_zone": "Avoid right edge and bottom 20%"
+    },
+    "native_behavior": "Fast scrolling, instant judgement within 0.5s. High engagement with comments and duet/stitch features.",
+    "algorithm_signals": [
+        "Completion rate > 100% (looping)",
+        "Share rate",
+        "Watch time distribution"
+    ],
+    "visual_keywords": [
+        "#VerticalNative",
+        "#FirstPerson",
+        "#HighImpact",
+        "#FastPaced",
+        "#HighSaturation",
+        "#ScrollStopper"
+    ],
+    "category": "platforms",
+    "id": "platform_tiktok",
+    "_metadata": {
+        "category": "platforms",
+        "exported_at": "2026-04-23T02:40:04.453Z",
+        "version": "1.1",
+        "updated_at": "2026-04-24T09:46:17.223Z"
+    }
+}

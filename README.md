@@ -1,22 +1,21 @@
 <img src="frontend/public/logo.png" alt="logo" width="220" />
 
-# 🎬 AdCreative AI Script Generator
+# 🥑 Avocado Workspace Hub (Matrix Server)
 
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-green.svg)
 ![React](https://img.shields.io/badge/React-19.x-61DAFB.svg)
-![Engine](https://img.shields.io/badge/Engine-Multi--Provider-orange.svg)
+![Engine](https://img.shields.io/badge/Engine-SOP_Failover-orange.svg)
 
-面向全球买量（UA）团队的 AI 脚本生成系统：
-输入项目档案 + 地区/平台/转化角度，输出可执行分镜脚本，并集成情报检索、用量监控、导出交付。
+面向全球买量（UA）团队的工业级 AI 脚本引擎（原 AdCreative AI Script Generator）：
+输入项目档案 + 地区/平台/转化角度，输出可执行分镜脚本与高质量文案，并深度集成情报检索 (Oracle Intel)、Zero-Deviance UI 防偏离系统与用量监控。
 
 ## 当前应用状况（2026-04）
 
-- 已进入稳定迭代阶段（见 `docs/MEMORY_BANK.md`，当前 V2.6，Multi-Provider）
-- 核心链路可用：`extract -> generate/quick-copy -> result -> export`
-- 前端/后端分离：`React + Vite` / `FastAPI`
-- **多 LLM 供应商（云端 OpenAI 兼容协议）**：DeepSeek / SiliconFlow / 阿里云百炼 / OpenRouter / ZEN（占位）；Lab 内 Engine Selector 二级下拉即可切换；未配置或调用失败仍以 502 显式报错，不做 mock/占位降级。
-- 已具备运行级用量监控（Token、Oracle 检索/归档、单脚本/平均消耗、**by_provider** 维度）
+- 已演进为 3D Matrix Architecture (Game -> Region -> Platform) 架构标准。
+- 核心链路：`extract -> generate/quick-copy -> result -> export`，并通过 `Zero-Scroll` UI 规范实现了高密度控制台体验。
+- **多 LLM 供应商（SOP 引擎容灾架构）**：DeepSeek / SiliconFlow / 阿里云百炼 / OpenRouter。内置多跳自动故障转移 (Multi-hop Failover)，当遇到 Rate Limit 或 503 时无缝切换至降级备用引擎。
+- **因子合规引擎 (Factor Compliance Test)**：自带引擎打分系统 (0-100分)，自动拦截不达标模型，量化评估模型输出结构化战略数据的稳定性。
 
 ## 工作流闭环（生成→复用→刷新→对比→导出）
 
@@ -148,31 +147,28 @@ npm run test:e2e
 
 详细流程见：[`docs/E2E_FULL_VERIFICATION_RUNBOOK.md`](docs/E2E_FULL_VERIFICATION_RUNBOOK.md)
 
-## 支持的云端大模型（Phase 25 / V2.6）
+## 支持的云端大模型与容灾架构
 
-所有 Provider 都走 OpenAI 兼容协议，只需配置对应的 API Key 即可启用。未配置的 Provider 会在 Engine Selector 中显示 `no key`，选中后服务端自动回落到已配置的 `DEEPSEEK_API_KEY`（缺省兜底）。
+所有 Provider 都走 OpenAI 兼容协议。未配置或异常的 Provider 会在引擎列表中高亮为不可用，此时系统会自动根据设定的**全局降级队列 (Failover Order)** 进行任务转移。
 
-| Provider ID | 厂商 / 说明 | API Key Env | Base URL（默认） | 默认模型 | 备注 |
+| Provider ID | 厂商 / 说明 | API Key Env | Base URL（默认后台托管） | 默认模型 | 备注 |
 |---|---|---|---|---|---|
-| `deepseek` | DeepSeek（默认） | `DEEPSEEK_API_KEY` | `https://api.deepseek.com` | `deepseek-chat` | 也可切 `deepseek-reasoner` |
+| `deepseek` | DeepSeek（系统推荐） | `DEEPSEEK_API_KEY` | `https://api.deepseek.com` | `deepseek-v4-flash` | 可选 `-reasoner` 后缀以开启思考模式，及 `deepseek-v4-pro` |
 | `siliconflow` | 硅基流动 | `SILICONFLOW_API_KEY` | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V3` | 支持 Qwen2.5-72B / Llama-3.1-70B 等 |
-| `bailian` | 阿里云百炼（DashScope 兼容模式） | `BAILIAN_API_KEY` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | 可切 `qwen-max` / `qwen-turbo` |
-| `openrouter` | OpenRouter | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` | `deepseek/deepseek-chat` | 可走 `anthropic/claude-3.5-sonnet` 等 |
-| `zen` | Open Code ZEN | `ZEN_API_KEY` | `https://api.opencode.zen/v1` | `zen-default` | **deferred**（占位，等官方生产入口） |
+| `bailian` | 阿里云百炼 | `BAILIAN_API_KEY` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | 可切 `qwen-max` / `qwen-turbo` |
+| `openrouter` | OpenRouter | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` | `deepseek/deepseek-v4-flash` | 路由至全球主流大模型 |
+| `zen` | Open Code ZEN | `ZEN_API_KEY` | `https://api.opencode.zen/v1` | `zen-default` | 暂处于 Beta 阶段（默认隐藏） |
 
-`backend/.env.example` 内已放好五段模板，去掉注释即可启用。单次调用可通过请求体 `engine_provider` / `engine_model` 覆盖默认；前端 Lab 的 Engine Selector 会自动透传到 `/api/generate`、`/api/quick-copy`、`/api/quick-copy/refresh`、`/api/quick-copy/retry-region`、`/api/extract-url` 与 `/api/estimate`。
+`backend/.env.example` 内已放好五段模板，去掉注释即可启用。
 
-### 在前端直接管理 API Key / 模型列表（Phase 27 · F）
+### 桌面级大模型控制台 (Two-Column Settings Dashboard)
 
-导航栏 → **LLM Providers**（`/settings/providers`）可以在运行时修改：
+我们在 Hub 面板内部置入了全新的工业级左右双栏大模型管理中枢，**完全摒弃了传统的数据库 (SQLite) Key 托管方案，全面转向更安全、强制性的环境变量 (Env) 控制驱动**。
 
-- **API Key**：粘贴后立即写入 `backend/data/app.sqlite3` 的 `provider_settings` 表，Engine Selector 下次下拉即显示 `READY`；支持 `连通性测试` 按钮做一次最小调用（优先 `models.list`，失败回退 `max_tokens=1` 的 chat ping）
-- **Base URL**：自建网关 / 反向代理一键切换
-- **默认模型**：留空沿用内置默认；非空覆盖所有 call path
-- **自定义模型列表**：手动添加或点 `拉取模型` 直接调 `client.models.list()`，结果合并到 Engine Selector 下拉框
-- 单行 `清空 DB 覆盖` 按钮即可回落到 `.env` / 内置默认
-
-优先级 `call-arg > DB > env > built-in default` —— `.env` 值仍然有效，CI 环境下完全不受影响。**安全提示**：API Key 以明文存放于 `backend/data/app.sqlite3`，请把该文件视同密钥文件保管。
+- **动态 API Key 覆写**：在 UI 面板中填写的 API Key，将通过安全接口直接覆写并更新到项目后端的 `.env` 文件以及当前进程内存中，不再存留于 SQLite 数据库内。
+- **Base URL 后台托管**：为防止越权与配置错误，Base URL 输入框已在前端彻底隐藏，仅作为后端内置的只读属性展示。
+- **全局路由与合规探针**：控制台左栏实时展示每个模型的**可用状态**及**合规评测分数 (Compliance Score)**，并可在左侧快速编排系统的 Failover (降级容灾) 兜底顺位队列。
+- **自定义模型拉取**：支持连通性测试，并可从供应商一键 `fetch-models` 拉取线上最新可用模型。
 
 历史记录（`history_log`，schema v3）会持久化每条生成所使用的 `provider` / `model`，用于 `by_provider` 维度的成本归因；Dashboard 历史条目会以胶囊徽章形式直接显示。
 

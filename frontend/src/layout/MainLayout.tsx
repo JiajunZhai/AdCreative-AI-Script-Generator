@@ -1,15 +1,16 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { Clapperboard, LayoutDashboard, Sparkles, Settings, LifeBuoy, Compass, ChevronsUpDown, ChevronRight, Check, Activity, ShieldCheck, BrainCircuit } from 'lucide-react';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { Clapperboard, Sparkles, LifeBuoy, ChevronsUpDown, ChevronRight, Check, Activity, ShieldCheck, MessageSquareText } from 'lucide-react';
+import { NavLink, useLocation, useNavigate, Link } from 'react-router-dom';
 import { useReducedMotion } from 'framer-motion';
 import axios from 'axios';
 import { API_BASE } from '../config/apiBase';
 import { useShellActivity } from '../context/ShellActivityContext';
 import { useProjectContext } from '../context/ProjectContext';
 import { ThemeAppearanceControl } from '../components/ThemeAppearanceControl';
+import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { LiveMarketDrawer } from '../components/LiveMarketDrawer';
 import { ProjectSetupModal } from '../components/ProjectSetupModal';
-import { ParameterManagerModal } from '../components/ParameterManagerModal';
+
 import { useTranslation } from 'react-i18next';
 import systemLogo from '../assets/logo.png';
 
@@ -42,7 +43,7 @@ interface UsageSummary {
 const USAGE_CACHE_MS = 45_000;
 
 export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const location = useLocation();
   const reduceMotion = useReducedMotion();
   const { generator, oracle } = useShellActivity();
@@ -61,7 +62,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   const { projects, currentProject, setCurrentProject, isLoading: projLoading } = useProjectContext();
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
   const [showSetupModal, setShowSetupModal] = useState(false);
-  const [showParameterManager, setShowParameterManager] = useState(false);
+  // const [showParameterManager, setShowParameterManager] = useState(false);
 
   const handleOpenSetup = () => {
      setShowProjectDropdown(false);
@@ -94,11 +95,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   }, [loadUsageSummary]);
 
   const navItems = [
-    { to: '/dashboard', label: t('nav.dashboard'), icon: LayoutDashboard },
     { to: '/generator', label: t('nav.lab'), icon: Sparkles },
-    { to: '/oracle', label: t('nav.oracle'), icon: Compass },
-    { to: '/compliance', label: t('nav.compliance'), icon: ShieldCheck },
-    { to: '/settings/providers', label: t('nav.providers'), icon: BrainCircuit }
+    { to: '/copy-lab', label: t('nav.copy_lab'), icon: MessageSquareText },
+    { to: '/compliance', label: t('nav.compliance'), icon: ShieldCheck }
   ];
 
     const navigate = useNavigate();
@@ -350,29 +349,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
         <div className="mt-auto px-6 space-y-4">
           <div className="space-y-2">
-            {/* Cyber Segmented Language Switcher */}
-            <div className="flex bg-surface-container-high/50 p-1 rounded-lg border border-outline-variant/30 relative shadow-inner mb-2">
-               <button
-                  onClick={() => { i18n.changeLanguage('en'); localStorage.setItem('sop_engine_lang', 'en') }}
-                  className={`flex-1 text-[10px] font-black uppercase tracking-widest py-1.5 rounded-md relative z-10 transition-colors duration-300 ${i18n.language === 'en' ? 'text-on-primary' : 'text-on-surface-variant hover:text-on-surface'}`}
-               >
-                  EN
-               </button>
-               <button
-                  onClick={() => { i18n.changeLanguage('zh'); localStorage.setItem('sop_engine_lang', 'zh') }}
-                  className={`flex-1 text-[10px] font-black uppercase tracking-widest py-1.5 rounded-md relative z-10 transition-colors duration-300 ${i18n.language === 'zh' ? 'text-on-primary' : 'text-on-surface-variant hover:text-on-surface'}`}
-               >
-                  中
-               </button>
-               <div 
-                  className={`absolute top-1 bottom-1 w-[calc(50%-4px)] bg-primary rounded-md shadow-sm transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${i18n.language === 'zh' ? 'translate-x-[calc(100%+4px)]' : 'translate-x-0'}`}
-               />
-            </div>
 
-            <button type="button" onClick={() => setShowParameterManager(true)} className="btn-director-ghost">
-              <Settings className="w-4 h-4 shrink-0" />
-              <span>{t('nav.settings')}</span>
-            </button>
+
+
             <button type="button" className="btn-director-ghost">
               <LifeBuoy className="w-4 h-4 shrink-0" />
               <span>{t('nav.support')}</span>
@@ -384,15 +363,17 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       <div className="lg:ml-64 flex-1 min-w-0 flex flex-col">
         <header className="sticky top-0 z-40 bg-background/85 backdrop-blur-xl border-b border-outline-variant/20 flex justify-between items-center px-6 h-14">
           <div className="flex items-center gap-1.5 min-w-0 text-sm">
-            <span className="text-on-surface-variant font-medium hidden sm:block">{t('nav.my_projects')}</span>
+            <Link to="/hub" className="text-on-surface-variant font-medium hidden sm:block hover:text-primary transition-colors">{t('nav.my_projects')}</Link>
             <ChevronRight className="w-3.5 h-3.5 text-outline-variant hidden sm:block" />
-            <span className="text-on-surface-variant font-medium truncate max-w-[120px] sm:max-w-[180px]">
+            <Link to="/hub" className="text-on-surface-variant font-medium truncate max-w-[120px] sm:max-w-[180px] hover:text-primary transition-colors">
                {currentProject ? currentProject.name : t('nav.loading')}
-            </span>
+            </Link>
             <ChevronRight className="w-3.5 h-3.5 text-outline-variant" />
             <span className="text-on-surface font-bold truncate">
               {location.pathname.startsWith('/generator') ? t('nav.lab') :
-               location.pathname.startsWith('/dashboard') ? t('nav.dashboard') : 
+               location.pathname.startsWith('/copy-lab') ? t('nav.copy_lab') :
+               location.pathname.startsWith('/compliance') ? t('nav.compliance') :
+               location.pathname.startsWith('/matrix') ? 'Matrix Console' : 
                location.pathname.startsWith('/oracle') ? t('nav.oracle') : t('nav.overview')}
             </span>
           </div>
@@ -406,6 +387,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
               <Activity className="w-4 h-4 text-on-surface-variant group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors" />
               <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant group-hover:text-on-surface hidden sm:block transition-colors">{t('nav.intel')}</span>
             </button>
+            <LanguageSwitcher />
             <ThemeAppearanceControl />
           </div>
         </header>
@@ -415,7 +397,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       </div>
       <LiveMarketDrawer isOpen={isMarketDrawerOpen} onClose={() => setMarketDrawerOpen(false)} />
       <ProjectSetupModal isOpen={showSetupModal} onClose={() => setShowSetupModal(false)} />
-      <ParameterManagerModal isOpen={showParameterManager} onClose={() => setShowParameterManager(false)} />
+
     </div>
   );
 };

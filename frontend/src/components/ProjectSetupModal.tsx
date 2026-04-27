@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
-import { X, Shield, Clapperboard, Loader2, Link as LinkIcon, Type, Zap, Folder } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Shield, Clapperboard, Loader2, Link as LinkIcon, Type, Zap, Folder, Target, Eye, Trophy, Users, Swords, Languages } from 'lucide-react';
 import axios from 'axios';
 import { API_BASE } from '../config/apiBase';
 import { useProjectContext, type GameInfo, type Project } from '../context/ProjectContext';
 import { useTranslation } from 'react-i18next';
-import { useEffect } from 'react';
 
 interface ProjectSetupModalProps {
   isOpen: boolean;
@@ -16,12 +15,23 @@ export const ProjectSetupModal: React.FC<ProjectSetupModalProps> = ({ isOpen, on
   const { t } = useTranslation();
   const { createProject, updateProject } = useProjectContext();
   
-  const [mode, setMode] = useState<'url' | 'manual'>('url');
+  const [mode, setMode] = useState<'url' | 'report' | 'manual'>('url');
   const [url, setUrl] = useState('');
+  const [reportText, setReportText] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
+  const [isTranslating, setIsTranslating] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [translateProgress, setTranslateProgress] = useState(0);
   
   const [name, setName] = useState('');
-  const [gameInfo, setGameInfo] = useState<GameInfo>({ core_gameplay: '', core_usp: '', target_persona: '', value_hooks: '' });
+  const [gameInfo, setGameInfo] = useState<GameInfo>({ 
+    core_loop: '', 
+    persona: '', 
+    visual_dna: '', 
+    competitive_set: [],
+    usp: {}
+  });
+  const [compSetInput, setCompSetInput] = useState('');
 
   useEffect(() => {
     if (isOpen) {
@@ -29,17 +39,21 @@ export const ProjectSetupModal: React.FC<ProjectSetupModalProps> = ({ isOpen, on
         setMode('manual');
         setName(editTarget.name);
         setGameInfo({
-          core_gameplay: editTarget.game_info.core_gameplay || '',
-          core_usp: editTarget.game_info.core_usp || '',
-          target_persona: editTarget.game_info.target_persona || '',
-          value_hooks: editTarget.game_info.value_hooks || ''
+          core_loop: editTarget.game_info.core_loop || '',
+          persona: editTarget.game_info.persona || '',
+          visual_dna: editTarget.game_info.visual_dna || '',
+          competitive_set: editTarget.game_info.competitive_set || [],
+          usp: editTarget.game_info.usp || {}
         });
+        setCompSetInput((editTarget.game_info.competitive_set || []).join(', '));
         setUrl('');
       } else {
         setMode('url');
         setName('');
-        setGameInfo({ core_gameplay: '', core_usp: '', target_persona: '', value_hooks: '' });
+        setGameInfo({ core_loop: '', persona: '', visual_dna: '', competitive_set: [], usp: {} });
+        setCompSetInput('');
         setUrl('');
+        setReportText('');
       }
     }
   }, [isOpen, editTarget]);
@@ -48,70 +62,163 @@ export const ProjectSetupModal: React.FC<ProjectSetupModalProps> = ({ isOpen, on
 
   const handleExtract = async () => {
      if (!url.trim()) return alert("Playstore URL is required");
+     setProgress(0);
      setIsExtracting(true);
+     const interval = setInterval(() => {
+        setProgress(p => p > 90 ? p : p + (Math.random() * 8));
+     }, 400);
+     
      try {
        const res = await axios.post(`${API_BASE}/api/extract-url`, { url: url.trim(), engine: 'cloud' });
        if (res.data.success) {
           setName(res.data.title || '');
           if (res.data.extracted_usp) {
              try {
-                // Try to isolate the JSON part from the response
                 const jsonStr = res.data.extracted_usp.substring(res.data.extracted_usp.indexOf('{'), res.data.extracted_usp.lastIndexOf('}') + 1);
                 const parsed = JSON.parse(jsonStr);
                 
-                const hookEn = parsed.value_hooks?.[0]?.en || '';
-                const hookCn = parsed.value_hooks?.[0]?.cn || '';
-                const gameplayEn = parsed.core_gameplay?.en || '';
-                const gameplayCn = parsed.core_gameplay?.cn || '';
+                const coreLoop = typeof parsed.core_loop === 'string' ? parsed.core_loop : '';
+                const persona = typeof parsed.persona === 'string' ? parsed.persona : '';
                 
-                const personaEn = parsed.target_persona?.en || '';
-                const personaCn = parsed.target_persona?.cn || '';
-
-                let extendedHooks = "";
-                if (Array.isArray(parsed.value_hooks) && parsed.value_hooks.length > 1) {
-                   extendedHooks = parsed.value_hooks.slice(1).map((h: any) => `- ${h.en || h.cn || ''}`).join('\n');
+                let uspData = parsed.usp || {};
+                if (Object.keys(uspData).length === 0 && parsed.extracted_usp) {
+                   uspData = { 'Gameplay': parsed.extracted_usp };
                 }
-                
+
                 setGameInfo({
-                   core_gameplay: (gameplayEn || gameplayCn || "").slice(0, 200),
-                   core_usp: (hookEn || hookCn || res.data.extracted_usp).slice(0, 200),
-                   target_persona: (personaEn || personaCn || "").slice(0, 300),
-                   value_hooks: extendedHooks
+                   core_loop: coreLoop.slice(0, 400),
+                   persona: persona.slice(0, 400),
+                   visual_dna: parsed.visual_dna || '',
+                   competitive_set: parsed.competitive_set || [],
+                   usp: uspData
                 });
+
+                if (parsed.competitive_set && Array.isArray(parsed.competitive_set)) {
+                   setCompSetInput(parsed.competitive_set.join(', '));
+                }
              } catch (e) {
-                // Fallback if parsing fails
+                console.error("Failed to parse extracted JSON:", e);
+                // Fallback heuristic if it's not JSON
                 setGameInfo({
-                   core_gameplay: "Auto-extracted heuristics",
-                   core_usp: res.data.extracted_usp.slice(0, 200)
+                   core_loop: "Auto-extracted heuristics",
+                   persona: "",
+                   visual_dna: "",
+                   competitive_set: [],
+                   usp: { 'Main': res.data.extracted_usp.slice(0, 200) }
                 });
              }
           }
-          setMode('manual');
+          setProgress(100);
+          setTimeout(() => setMode('manual'), 400);
        } else {
           alert('Extraction failed: ' + res.data.error);
        }
      } catch (e: any) {
         alert("Extraction request failed. Backend may be offline.");
      } finally {
+        clearInterval(interval);
         setIsExtracting(false);
      }
+  };
+
+  const handleExtractReport = async () => {
+     if (!reportText.trim()) return alert("Report text is required");
+     setProgress(0);
+     setIsExtracting(true);
+     const interval = setInterval(() => {
+        setProgress(p => p > 90 ? p : p + (Math.random() * 8));
+     }, 400);
+
+     try {
+       const res = await axios.post(`${API_BASE}/api/extract-text`, { text: reportText.trim(), engine: 'cloud' });
+       if (res.data.success) {
+          if (res.data.title) setName(res.data.title);
+          if (res.data.extracted_usp) {
+             try {
+                const jsonStr = res.data.extracted_usp.substring(res.data.extracted_usp.indexOf('{'), res.data.extracted_usp.lastIndexOf('}') + 1);
+                const parsed = JSON.parse(jsonStr);
+                
+                setGameInfo({
+                   core_loop: parsed.core_loop || '',
+                   persona: parsed.persona || '',
+                   visual_dna: parsed.visual_dna || '',
+                   competitive_set: parsed.competitive_set || [],
+                   usp: parsed.usp || {}
+                });
+                if (parsed.competitive_set && Array.isArray(parsed.competitive_set)) {
+                   setCompSetInput(parsed.competitive_set.join(', '));
+                }
+             } catch (e) {
+                console.error("Failed to parse extracted JSON:", e);
+             }
+          }
+          setProgress(100);
+          setTimeout(() => setMode('manual'), 400);
+       } else {
+          alert('Extraction failed: ' + res.data.error);
+       }
+     } catch (e: any) {
+        alert("Extraction request failed. Backend may be offline.");
+     } finally {
+        clearInterval(interval);
+        setIsExtracting(false);
+     }
+  };
+
+  const handleTranslate = async () => {
+    // Detect current language roughly by checking if there's Chinese in core_loop or persona
+    const currentText = (gameInfo.core_loop || '') + (gameInfo.persona || '');
+    const isCurrentlyChinese = /[\u4e00-\u9fa5]/.test(currentText);
+    const targetLang = isCurrentlyChinese ? 'en' : 'cn';
+    
+    setTranslateProgress(0);
+    setIsTranslating(true);
+    const interval = setInterval(() => {
+       setTranslateProgress(p => p > 90 ? p : p + (Math.random() * 8));
+    }, 400);
+
+    try {
+       const res = await axios.post(`${API_BASE}/api/translate-dna`, {
+          game_info: gameInfo,
+          target_lang: targetLang
+       });
+       if (res.data.success && res.data.translated_info) {
+          setGameInfo(res.data.translated_info);
+       } else {
+          alert('Translation failed: ' + (res.data.error || 'Unknown error'));
+       }
+    } catch (e: any) {
+       console.error("Translation request failed", e);
+       alert("Translation request failed. Backend may be offline.");
+    } finally {
+       clearInterval(interval);
+       setTranslateProgress(100);
+       setTimeout(() => {
+          setIsTranslating(false);
+          setTranslateProgress(0);
+       }, 300);
+    }
   };
 
   const handleSave = async () => {
      if (!name.trim()) return alert("Project name is required");
      let success = false;
      
+     // Parse competitive set input
+     const compSet = compSetInput.split(',').map(s => s.trim()).filter(Boolean);
+     const finalGameInfo = { ...gameInfo, competitive_set: compSet };
+     
      if (editTarget) {
         const proj = await updateProject(editTarget.id, {
             name: name.trim(),
-            game_info: gameInfo,
+            game_info: finalGameInfo,
             market_targets: editTarget.market_targets || []
         });
         if (proj) success = true;
      } else {
         const proj = await createProject({
             name: name.trim(),
-            game_info: gameInfo,
+            game_info: finalGameInfo,
             market_targets: []
         });
         if (proj) success = true;
@@ -124,120 +231,264 @@ export const ProjectSetupModal: React.FC<ProjectSetupModalProps> = ({ isOpen, on
      }
   };
 
+  const updateUsp = (key: string, value: string) => {
+     setGameInfo(prev => ({
+        ...prev,
+        usp: { ...(prev.usp || {}), [key]: value }
+     }));
+  };
+
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="card-base shadow-2xl rounded-2xl w-full max-w-[1000px] max-h-[85vh] flex flex-col overflow-hidden">
-         <div className="flex items-center justify-between p-5 border-b border-outline-variant/20 bg-surface-container-low">
-            <div className="flex items-center gap-3">
-               <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
-                  <Shield className="w-4 h-4" />
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6 md:p-12 animate-in fade-in duration-300">
+      <div className="absolute inset-0 bg-background/80 backdrop-blur-md" onClick={onClose} />
+      
+      <div className="relative shadow-2xl rounded-[1.5rem] w-full max-w-[1200px] max-h-[95vh] flex flex-col overflow-hidden bg-surface border border-outline-variant/30 ring-1 ring-emerald-500/10">
+         
+         {/* HEADER */}
+         <div className="flex items-center justify-between p-6 border-b border-outline-variant/20 bg-surface/50 backdrop-blur-sm relative z-10 shrink-0">
+            <div className="flex items-center gap-4">
+               <div className="w-10 h-10 rounded-[12px] bg-gradient-to-br from-emerald-50 to-emerald-100/50 dark:from-emerald-900/40 dark:to-emerald-800/20 border border-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shadow-sm">
+                  <Shield className="w-5 h-5" />
                </div>
-               <h2 className="text-lg font-bold text-on-surface">
-                 {editTarget ? t('setup.title_edit') : t('setup.title')}
-               </h2>
+               <div className="flex flex-col">
+                 <h2 className="text-lg font-black tracking-tight text-on-surface leading-none mb-1.5">
+                   {editTarget ? t('setup.title_edit', 'Edit Workspace DNA') : t('setup.title', 'Initialize 5-Pillar DNA')}
+                 </h2>
+                 <span className="text-[10px] font-bold tracking-[0.2em] text-emerald-600/70 dark:text-emerald-400/70 uppercase">
+                   Workspace Configuration
+                 </span>
+               </div>
             </div>
-            <button onClick={onClose} className="p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded-lg transition-colors">
+            <button onClick={onClose} className="p-2.5 text-on-surface-variant/60 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-xl transition-colors">
                <X className="w-5 h-5" />
             </button>
          </div>
 
-         <div className="p-6 overflow-y-auto flex-1 space-y-6 form-director">
+         {/* BODY */}
+         <div className="p-6 md:p-8 overflow-y-auto flex-1 custom-scrollbar">
             
             {/* Mode Switcher */}
             {!editTarget && (
-               <div className="flex bg-surface-container rounded-xl p-1 mb-6 border-[0.5px] border-outline-variant/30">
+               <div className="flex bg-surface-container-lowest border border-outline-variant/30 p-1 mb-8 rounded-[14px] shadow-sm relative max-w-[500px]">
                   <button 
                      onClick={() => setMode('url')}
-                     className={`flex-1 py-2.5 text-[11px] font-bold uppercase tracking-wider rounded-lg transition-all ${mode === 'url' ? 'bg-surface-container-high text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high/50'}`}
+                     className={`relative z-10 flex-1 py-3 text-[12px] font-bold uppercase tracking-wider rounded-[10px] transition-all duration-300 ${mode === 'url' ? 'text-emerald-800 dark:text-emerald-100' : 'text-on-surface-variant/70 hover:text-on-surface'}`}
                   >
-                     <div className="flex items-center justify-center gap-2"><LinkIcon className="w-3.5 h-3.5" /> {t('setup.mode_url')}</div>
+                     <div className="flex items-center justify-center gap-2.5"><LinkIcon className="w-4 h-4" /> {t('setup.mode_url', 'URL Extraction')}</div>
+                  </button>
+                  <button 
+                     onClick={() => setMode('report')}
+                     className={`relative z-10 flex-1 py-3 text-[12px] font-bold uppercase tracking-wider rounded-[10px] transition-all duration-300 ${mode === 'report' ? 'text-emerald-800 dark:text-emerald-100' : 'text-on-surface-variant/70 hover:text-on-surface'}`}
+                  >
+                     <div className="flex items-center justify-center gap-2.5"><Folder className="w-4 h-4" /> {t('setup.mode_report', 'AI Text Analysis')}</div>
                   </button>
                   <button 
                      onClick={() => setMode('manual')}
-                     className={`flex-1 py-2.5 text-[11px] font-bold uppercase tracking-wider rounded-lg transition-all ${mode === 'manual' ? 'bg-surface-container-high text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high/50'}`}
+                     className={`relative z-10 flex-1 py-3 text-[12px] font-bold uppercase tracking-wider rounded-[10px] transition-all duration-300 ${mode === 'manual' ? 'text-emerald-800 dark:text-emerald-100' : 'text-on-surface-variant/70 hover:text-on-surface'}`}
                   >
-                     <div className="flex items-center justify-center gap-2"><Type className="w-3.5 h-3.5" /> {t('setup.mode_manual')}</div>
+                     <div className="flex items-center justify-center gap-2.5"><Type className="w-4 h-4" /> {t('setup.mode_manual', 'Manual Setup')}</div>
                   </button>
+                  
+                  {/* Animated Sliding Pill */}
+                  <div className="absolute inset-y-1 left-1 right-1 flex pointer-events-none z-0">
+                     <div 
+                        className={`w-1/3 h-full bg-white dark:bg-surface border border-outline-variant/20 rounded-[10px] shadow-[0_2px_8px_rgba(16,185,129,0.08)] transition-transform duration-500 ease-out ${mode === 'url' ? 'translate-x-0' : mode === 'report' ? 'translate-x-full' : 'translate-x-[200%]'}`}
+                     />
+                  </div>
                </div>
             )}
 
             {mode === 'url' && !editTarget ? (
-               <div className="flex flex-col gap-5 pt-2 animate-in fade-in slide-in-from-bottom-2">
-                  <div className="flex flex-col gap-2 relative">
+               <div className="flex flex-col gap-6 pt-2 animate-in fade-in zoom-in-95 duration-300 max-w-2xl mx-auto w-full">
+                  <div className="relative group">
+                     <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
+                        <LinkIcon className="w-5 h-5 text-on-surface-variant/50 group-focus-within:text-emerald-500 transition-colors duration-300" />
+                     </div>
                      <input 
                         type="url"
                         value={url}
                         onChange={e => setUrl(e.target.value)}
-                        placeholder={t('setup.url_ph')}
-                        className="input-surface pl-10 h-12 w-full text-sm font-medium tracking-wide"
+                        placeholder={t('setup.url_ph', 'Paste Playstore or AppStore URL here...')}
+                        className="block w-full pl-14 pr-4 py-4 bg-surface-container-lowest border border-outline-variant/40 rounded-2xl text-sm font-medium tracking-wide text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/50 transition-all shadow-sm"
                      />
-                     <LinkIcon className="w-4 h-4 text-on-surface-variant absolute left-4 top-[1.1rem]" />
                   </div>
                   
-                  <div className="bg-surface-container-low border border-outline-variant/30 rounded-xl p-4 flex items-start gap-4 shadow-sm relative overflow-hidden">
-                     <div className="w-1 absolute left-0 inset-y-0 bg-primary rounded-l-xl" />
-                     <div className="mt-1 w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
-                        <Zap className="w-4 h-4 text-primary" />
+                  {isExtracting ? (
+                     <div className="mt-6 w-full flex flex-col gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex justify-between items-center text-[11px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest px-1">
+                           <div className="flex items-center gap-2">
+                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                             {t('setup.analyzing', 'Extracting DNA...')}
+                           </div>
+                           <span>{Math.round(progress)}%</span>
+                        </div>
+                        <div className="w-full h-2.5 bg-surface-container-highest dark:bg-surface-container-low rounded-full overflow-hidden shadow-inner relative">
+                           <div 
+                             className="absolute left-0 top-0 bottom-0 bg-emerald-500 transition-all duration-300 ease-out"
+                             style={{ width: `${progress}%` }}
+                           >
+                              <div className="absolute inset-0 bg-[linear-gradient(45deg,rgba(255,255,255,0.15)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.15)_50%,rgba(255,255,255,0.15)_75%,transparent_75%,transparent)] bg-[length:1rem_1rem] animate-[progress-stripes_1s_linear_infinite]" />
+                           </div>
+                        </div>
                      </div>
-                     <div className="flex-1">
-                        <h4 className="text-sm font-bold text-on-surface mb-1">{t('setup.btn_analyze')}</h4>
-                        <p className="text-[11px] text-on-surface-variant leading-relaxed">
-                           Our cloud agents will deeply scrape the provided store linkage and extract exact USP/Genre parameters to automatically populate the creative matrices payload.
-                        </p>
+                  ) : (
+                     <button 
+                       onClick={handleExtract}
+                       disabled={!url.trim()}
+                       className="mt-4 w-full relative flex items-center justify-center gap-3 px-8 py-4 rounded-[14px] bg-emerald-500 hover:bg-emerald-600 text-white font-bold tracking-widest uppercase text-[13px] transition-all duration-300 disabled:opacity-50 disabled:hover:translate-y-0 shadow-[0_8px_20px_-6px_rgba(16,185,129,0.4)] hover:shadow-[0_12px_25px_-6px_rgba(16,185,129,0.5)] overflow-hidden group"
+                     >
+                       <div className="absolute inset-0 bg-gradient-to-r from-emerald-400/0 via-white/20 to-emerald-400/0 opacity-0 group-hover:opacity-100 group-hover:translate-x-full transition-all duration-700 ease-out" />
+                       <Clapperboard className="w-5 h-5" /> {t('setup.btn_analyze', 'Analyze Project')}
+                     </button>
+                  )}
+               </div>
+            ) : mode === 'report' && !editTarget ? (
+               <div className="flex flex-col gap-6 pt-2 animate-in fade-in zoom-in-95 duration-300 max-w-2xl mx-auto w-full">
+                  <div className="relative group">
+                     <div className="absolute top-5 left-0 pl-5 flex pointer-events-none">
+                        <Folder className="w-5 h-5 text-on-surface-variant/50 group-focus-within:text-emerald-500 transition-colors duration-300" />
                      </div>
+                     <textarea 
+                        value={reportText}
+                        onChange={e => setReportText(e.target.value)}
+                        placeholder={t('setup.report_ph', 'Paste your game breakdown/analysis report here...')}
+                        className="block w-full pl-14 pr-4 py-4 bg-surface-container-lowest border border-outline-variant/40 rounded-2xl text-sm font-medium tracking-wide text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/50 transition-all shadow-sm h-[180px] resize-none custom-scrollbar"
+                     />
                   </div>
-
-                  <button 
-                    onClick={handleExtract}
-                    disabled={isExtracting || !url.trim()}
-                    className="mt-2 w-full btn-director-primary justify-center shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all text-[13px] h-12 disabled:hover:translate-y-0"
-                  >
-                    {isExtracting ? (
-                       <><Loader2 className="w-4 h-4 animate-spin" /> {t('setup.analyzing')}</>
-                    ) : (
-                       <><Clapperboard className="w-4 h-4" /> {t('setup.btn_analyze')}</>
-                    )}
-                  </button>
+                  
+                  {isExtracting ? (
+                     <div className="mt-6 w-full flex flex-col gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex justify-between items-center text-[11px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest px-1">
+                           <div className="flex items-center gap-2">
+                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                             {t('setup.analyzing', 'Extracting DNA...')}
+                           </div>
+                           <span>{Math.round(progress)}%</span>
+                        </div>
+                        <div className="w-full h-2.5 bg-surface-container-highest dark:bg-surface-container-low rounded-full overflow-hidden shadow-inner relative">
+                           <div 
+                             className="absolute left-0 top-0 bottom-0 bg-emerald-500 transition-all duration-300 ease-out"
+                             style={{ width: `${progress}%` }}
+                           >
+                              <div className="absolute inset-0 bg-[linear-gradient(45deg,rgba(255,255,255,0.15)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.15)_50%,rgba(255,255,255,0.15)_75%,transparent_75%,transparent)] bg-[length:1rem_1rem] animate-[progress-stripes_1s_linear_infinite]" />
+                           </div>
+                        </div>
+                     </div>
+                  ) : (
+                     <button 
+                       onClick={handleExtractReport}
+                       disabled={!reportText.trim()}
+                       className="mt-4 w-full relative flex items-center justify-center gap-3 px-8 py-4 rounded-[14px] bg-emerald-500 hover:bg-emerald-600 text-white font-bold tracking-widest uppercase text-[13px] transition-all duration-300 disabled:opacity-50 disabled:hover:translate-y-0 shadow-[0_8px_20px_-6px_rgba(16,185,129,0.4)] hover:shadow-[0_12px_25px_-6px_rgba(16,185,129,0.5)] overflow-hidden group"
+                     >
+                       <div className="absolute inset-0 bg-gradient-to-r from-emerald-400/0 via-white/20 to-emerald-400/0 opacity-0 group-hover:opacity-100 group-hover:translate-x-full transition-all duration-700 ease-out" />
+                       <Clapperboard className="w-5 h-5" /> {t('setup.btn_analyze', 'Analyze Project')}
+                     </button>
+                  )}
                </div>
             ) : (
-               <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start animate-in fade-in slide-in-from-bottom-2">
+               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch animate-in fade-in zoom-in-95 duration-300 relative">
                   
-                   {/* LEFT PANE: Foundation (41%) */}
-                   <div className="md:col-span-5 flex flex-col gap-6 pr-2 md:border-r border-outline-variant/20">
-                      <h3 className="text-[10px] font-black tracking-widest uppercase text-on-surface-variant/80 flex items-center gap-1.5 mb-2 px-1">
-                          <Folder className="w-3.5 h-3.5" /> BASE DNA 
-                      </h3>
+                  {isTranslating && (
+                     <div className="absolute inset-0 z-50 bg-surface/50 dark:bg-surface/60 backdrop-blur-sm rounded-[1.5rem] flex flex-col items-center justify-center animate-in fade-in duration-300">
+                        <div className="w-full max-w-md p-6 bg-white dark:bg-surface-container rounded-2xl border border-outline-variant/30 shadow-2xl flex flex-col gap-5">
+                           <div className="flex justify-between items-center text-[11px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest px-1">
+                              <div className="flex items-center gap-2">
+                                <Languages className="w-4 h-4 animate-pulse" />
+                                {t('setup.translating', 'Translating Matrix...')}
+                              </div>
+                              <span>{Math.round(translateProgress)}%</span>
+                           </div>
+                           <div className="w-full h-2.5 bg-surface-container-highest dark:bg-surface-container-low rounded-full overflow-hidden shadow-inner relative">
+                              <div 
+                                className="absolute left-0 top-0 bottom-0 bg-indigo-500 transition-all duration-300 ease-out"
+                                style={{ width: `${translateProgress}%` }}
+                              >
+                                 <div className="absolute inset-0 bg-[linear-gradient(45deg,rgba(255,255,255,0.15)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.15)_50%,rgba(255,255,255,0.15)_75%,transparent_75%,transparent)] bg-[length:1rem_1rem] animate-[progress-stripes_1s_linear_infinite]" />
+                              </div>
+                           </div>
+                        </div>
+                     </div>
+                  )}
+                  
+                   {/* LEFT PANE: Foundation DNA (5 cols) */}
+                   <div className="lg:col-span-5 flex flex-col gap-6 relative">
+                      <div className="flex items-center gap-2 mb-2">
+                         <Folder className="w-4 h-4 text-emerald-500" />
+                         <h3 className="text-[11px] font-black tracking-[0.2em] uppercase bg-clip-text text-transparent bg-gradient-to-r from-emerald-600 to-emerald-400">
+                             BASE DNA
+                         </h3>
+                      </div>
                       
-                      <div className="space-y-6">
-                          <div className="relative group">
-                            <label className="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">{t('setup.name_label')}</label>
-                            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder={t('setup.name_ph')} className="w-full bg-transparent border-b border-outline-variant/30 focus:border-primary text-base font-bold text-on-surface py-2 outline-none transition-colors" />
+                      <div className="space-y-6 flex-1 bg-surface-container-lowest/50 rounded-[1.5rem] border border-outline-variant/30 p-6 shadow-sm">
+                          {/* Project Name */}
+                          <div className="relative group flex flex-col gap-2.5">
+                            <label className="text-[10px] font-bold text-on-surface-variant/80 uppercase tracking-widest pl-1">{t('setup.name_label', 'Project Name')}</label>
+                            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder={t('setup.name_ph', 'e.g., Cyberpunk 2077 Mobile')} className="w-full bg-white dark:bg-surface border border-outline-variant/40 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/50 text-[14px] font-bold text-on-surface py-3 px-4 outline-none transition-all shadow-sm placeholder:font-medium placeholder:text-on-surface-variant/40" />
                           </div>
-                          <div className="relative group flex flex-col">
-                            <label className="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-2">{t('setup.core_gameplay')}</label>
-                            <textarea value={gameInfo.core_gameplay} onChange={e => setGameInfo({...gameInfo, core_gameplay: e.target.value})} placeholder={t('setup.core_gameplay_ph')} className="w-full bg-transparent border border-outline-variant/30 rounded-xl focus:border-primary text-[13px] text-on-surface p-4 min-h-[160px] resize-none outline-none custom-scrollbar transition-colors leading-relaxed shadow-sm hover:border-outline-variant/50" />
+                          
+                          {/* Core Loop */}
+                          <div className="relative group flex flex-col gap-2.5">
+                            <label className="text-[10px] font-bold text-on-surface-variant/80 uppercase tracking-widest pl-1 flex items-center gap-1.5"><Zap className="w-3.5 h-3.5 text-amber-500" /> {t('setup.core_loop', 'Core Loop')}</label>
+                            <textarea value={gameInfo.core_loop} onChange={e => setGameInfo({...gameInfo, core_loop: e.target.value})} placeholder={t('setup.core_loop_ph', 'The mechanical loop (e.g., Mow down -> Drop -> Upgrade)...')} className="w-full bg-white dark:bg-surface border border-outline-variant/40 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/50 text-[13px] font-medium text-on-surface p-4 min-h-[120px] resize-none outline-none custom-scrollbar transition-all leading-relaxed shadow-sm placeholder:text-on-surface-variant/40" />
+                          </div>
+
+                          {/* Visual DNA */}
+                          <div className="relative group flex flex-col gap-2.5">
+                            <label className="text-[10px] font-bold text-on-surface-variant/80 uppercase tracking-widest pl-1 flex items-center gap-1.5"><Eye className="w-3.5 h-3.5 text-blue-500" /> {t('setup.visual_dna', 'Visual DNA')}</label>
+                            <textarea value={gameInfo.visual_dna} onChange={e => setGameInfo({...gameInfo, visual_dna: e.target.value})} placeholder={t('setup.visual_dna_ph', 'Art style constraints (e.g., anime, realistic, dark)...')} className="w-full bg-white dark:bg-surface border border-outline-variant/40 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/50 text-[13px] font-medium text-on-surface p-4 min-h-[80px] resize-none outline-none custom-scrollbar transition-all leading-relaxed shadow-sm placeholder:text-on-surface-variant/40" />
+                          </div>
+
+                          {/* Competitive Set */}
+                          <div className="relative group flex flex-col gap-2.5">
+                            <label className="text-[10px] font-bold text-on-surface-variant/80 uppercase tracking-widest pl-1 flex items-center gap-1.5"><Swords className="w-3.5 h-3.5 text-rose-500" /> {t('setup.competitive_set', 'Competitive Set')}</label>
+                            <input type="text" value={compSetInput} onChange={e => setCompSetInput(e.target.value)} placeholder={t('setup.competitive_set_ph', 'e.g., Genshin Impact (Comma separated)')} className="w-full bg-white dark:bg-surface border border-outline-variant/40 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/50 text-[13px] font-medium text-on-surface py-3 px-4 outline-none transition-all shadow-sm placeholder:font-medium placeholder:text-on-surface-variant/40" />
                           </div>
                       </div>
                    </div>
 
-                   {/* RIGHT PANE: Intelligence (59%) */}
-                   <div className="md:col-span-7 flex flex-col gap-4 pl-2">
-                      <h3 className="text-[10px] font-black tracking-widest uppercase text-primary/90 flex items-center gap-1.5 mb-1 px-1">
-                          <Zap className="w-3.5 h-3.5" /> DEEP INTELLIGENCE
-                      </h3>
+                   {/* RIGHT PANE: Deep Intelligence (7 cols) */}
+                   <div className="lg:col-span-7 flex flex-col gap-6">
+                      <div className="flex items-center gap-2 mb-2 lg:pl-4">
+                         <Target className="w-4 h-4 text-emerald-500" />
+                         <h3 className="text-[11px] font-black tracking-[0.2em] uppercase bg-clip-text text-transparent bg-gradient-to-r from-emerald-600 to-emerald-400">
+                             DEEP INTELLIGENCE MATRIX
+                         </h3>
+                      </div>
                       
-                      <div className="bg-primary/5 rounded-[1.25rem] border-[0.5px] border-primary/20 p-5 space-y-5 relative">
-                          <div className="relative">
-                            <label className="block text-[10px] font-bold text-primary/80 uppercase tracking-wider mb-2 flex items-center gap-1.5"><span className="text-base drop-shadow-sm">🎯</span> {t('setup.target_persona')}</label>
-                            <textarea value={gameInfo.target_persona || ''} onChange={e => setGameInfo({...gameInfo, target_persona: e.target.value})} placeholder={t('setup.target_persona_ph')} className="w-full bg-surface-container-lowest/50 border border-primary/10 rounded-lg text-[13px] text-on-surface p-3 min-h-[60px] resize-none outline-none custom-scrollbar focus:border-primary/50 transition-colors leading-relaxed shadow-sm" />
+                      <div className="bg-gradient-to-b from-emerald-50/50 to-transparent dark:from-emerald-900/10 dark:to-transparent rounded-[1.5rem] border border-emerald-100 dark:border-emerald-800/30 p-6 space-y-6 shadow-sm flex-1">
+                          {/* Target Persona */}
+                          <div className="relative flex flex-col gap-2.5">
+                            <label className="text-[10px] font-bold text-emerald-800/80 dark:text-emerald-200/80 uppercase tracking-widest flex items-center gap-2 pl-1"><Users className="w-4 h-4 text-emerald-600 dark:text-emerald-400" /> {t('setup.target_persona', 'Target Persona')}</label>
+                            <textarea value={gameInfo.persona} onChange={e => setGameInfo({...gameInfo, persona: e.target.value})} placeholder={t('setup.target_persona_ph', 'Motivation-driven audience profiles (e.g., stress-relief seekers)...')} className="w-full bg-white dark:bg-surface border border-emerald-100 dark:border-emerald-800/50 rounded-xl text-[13px] font-medium text-on-surface p-4 min-h-[100px] resize-none outline-none custom-scrollbar focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/50 transition-all leading-relaxed shadow-sm" />
                           </div>
-                          <div className="relative">
-                            <label className="block text-[10px] font-bold text-primary/80 uppercase tracking-wider mb-2 flex items-center gap-1.5"><span className="text-base drop-shadow-sm">✨</span> {t('setup.core_usp')}</label>
-                            <textarea value={gameInfo.core_usp} onChange={e => setGameInfo({...gameInfo, core_usp: e.target.value})} placeholder={t('setup.core_usp_ph')} className="w-full bg-surface-container-lowest/50 border border-primary/10 rounded-lg text-[14px] text-on-surface p-3 min-h-[60px] resize-none outline-none custom-scrollbar focus:border-primary/50 transition-colors leading-relaxed font-bold shadow-sm" />
-                          </div>
-                          <div className="relative">
-                            <label className="block text-[10px] font-bold text-primary/80 uppercase tracking-wider mb-2 flex items-center gap-1.5"><span className="text-base drop-shadow-sm">⚡</span> {t('setup.value_hooks')}</label>
-                            <textarea value={gameInfo.value_hooks || ''} onChange={e => setGameInfo({...gameInfo, value_hooks: e.target.value})} placeholder={t('setup.value_hooks_ph')} className="w-full bg-surface-container-lowest/50 border border-primary/10 rounded-lg text-[12px] text-on-surface-variant p-4 min-h-[160px] resize-none outline-none custom-scrollbar focus:border-primary/50 transition-colors leading-[1.8] font-mono shadow-sm" />
+
+                          {/* USP Matrix */}
+                          <div className="flex flex-col gap-3 mt-6">
+                             <label className="text-[10px] font-bold text-emerald-800/80 dark:text-emerald-200/80 uppercase tracking-widest flex items-center gap-2 pl-1 mb-1">
+                                <Trophy className="w-4 h-4 text-amber-500" /> {t('setup.usp_matrix', 'USP Hooks Matrix')}
+                             </label>
+                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {/* Gameplay USP */}
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[11px] font-bold text-emerald-700/70 dark:text-emerald-300/70 ml-1">{t('setup.usp_gameplay', 'Gameplay Hooks')}</span>
+                                   <textarea value={gameInfo.usp?.['Gameplay'] || ''} onChange={e => updateUsp('Gameplay', e.target.value)} placeholder={t('setup.usp_gameplay_ph', 'e.g. 1000x drops, infinite combos...')} className="w-full bg-white dark:bg-surface border border-emerald-100 dark:border-emerald-800/50 rounded-xl text-[12px] font-medium text-emerald-950 dark:text-emerald-50 p-3 min-h-[90px] resize-none outline-none custom-scrollbar focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/50 transition-all shadow-sm" />
+                                </div>
+                                {/* Visual USP */}
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[11px] font-bold text-emerald-700/70 dark:text-emerald-300/70 ml-1">{t('setup.usp_visual', 'Visual Hooks')}</span>
+                                   <textarea value={gameInfo.usp?.['Visual'] || ''} onChange={e => updateUsp('Visual', e.target.value)} placeholder={t('setup.usp_visual_ph', 'e.g. Next-gen UE5...')} className="w-full bg-white dark:bg-surface border border-emerald-100 dark:border-emerald-800/50 rounded-xl text-[12px] font-medium text-emerald-950 dark:text-emerald-50 p-3 min-h-[90px] resize-none outline-none custom-scrollbar focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/50 transition-all shadow-sm" />
+                                </div>
+                                {/* Social USP */}
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[11px] font-bold text-emerald-700/70 dark:text-emerald-300/70 ml-1">{t('setup.usp_social', 'Social/Progression Hooks')}</span>
+                                   <textarea value={gameInfo.usp?.['Social'] || ''} onChange={e => updateUsp('Social', e.target.value)} placeholder={t('setup.usp_social_ph', 'e.g. Guild wars, massive PvP...')} className="w-full bg-white dark:bg-surface border border-emerald-100 dark:border-emerald-800/50 rounded-xl text-[12px] font-medium text-emerald-950 dark:text-emerald-50 p-3 min-h-[90px] resize-none outline-none custom-scrollbar focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/50 transition-all shadow-sm" />
+                                </div>
+                                {/* Generic/Other USP */}
+                                <div className="flex flex-col gap-1.5">
+                                   <span className="text-[11px] font-bold text-emerald-700/70 dark:text-emerald-300/70 ml-1">{t('setup.usp_other', 'Other Value Hooks')}</span>
+                                   <textarea value={gameInfo.usp?.['Other'] || ''} onChange={e => updateUsp('Other', e.target.value)} placeholder={t('setup.usp_other_ph', 'Any additional psychological triggers...')} className="w-full bg-white dark:bg-surface border border-emerald-100 dark:border-emerald-800/50 rounded-xl text-[12px] font-medium text-emerald-950 dark:text-emerald-50 p-3 min-h-[90px] resize-none outline-none custom-scrollbar focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/50 transition-all shadow-sm" />
+                                </div>
+                             </div>
                           </div>
                       </div>
                    </div>
@@ -247,12 +498,27 @@ export const ProjectSetupModal: React.FC<ProjectSetupModalProps> = ({ isOpen, on
 
          </div>
 
-        <div className="p-5 border-t border-outline-variant/20 bg-surface-container-low flex justify-end gap-3">
-           <button onClick={onClose} className="btn-director-secondary">{t('setup.cancel')}</button>
-           <button onClick={handleSave} className="btn-director-primary">
-             {editTarget ? t('setup.submit_edit') : t('setup.submit')}
-           </button>
-        </div>
+         {/* FOOTER */}
+          <div className="p-5 md:px-6 border-t border-outline-variant/20 bg-surface/50 backdrop-blur-sm flex justify-end gap-4 relative z-10 shrink-0">
+            <button onClick={onClose} disabled={isTranslating} className="px-6 py-2.5 rounded-[12px] font-bold text-[12px] uppercase tracking-widest text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors focus:outline-none disabled:opacity-50">
+              {t('setup.cancel', 'Cancel')}
+            </button>
+            {mode === 'manual' && (
+               <>
+                  <button 
+                     onClick={handleTranslate} 
+                     disabled={isTranslating}
+                     className="px-6 py-2.5 rounded-[12px] bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400 font-bold text-[12px] uppercase tracking-widest transition-colors flex items-center gap-2 disabled:opacity-50"
+                  >
+                     {isTranslating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Languages className="w-4 h-4" />}
+                     {t('setup.translate', 'AI Translate')}
+                  </button>
+                  <button onClick={handleSave} disabled={isTranslating} className="px-8 py-2.5 rounded-[12px] bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[12px] uppercase tracking-widest shadow-[0_4px_14px_rgba(16,185,129,0.3)] hover:shadow-[0_6px_20px_rgba(16,185,129,0.4)] transition-all hover:-translate-y-0.5 focus:outline-none disabled:opacity-50 disabled:hover:translate-y-0">
+                    {editTarget ? t('setup.submit_edit', 'Save Changes') : t('setup.submit', 'Initialize Workspace')}
+                  </button>
+               </>
+            )}
+         </div>
       </div>
     </div>
   );

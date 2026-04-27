@@ -1,0 +1,60 @@
+{
+    "name": "Brazil",
+    "short_name": "BR",
+    "description": "Ad creative strategy for the Brazilian market, emphasizing high-saturation visuals, Funk music, extreme wealth-poverty contrast, and quick gratification. Leverage features of Meta, TikTok, and Kwai platforms to achieve high conversion at low CPA. Core psychological drivers: Instant Gratification and Social Proof, leveraging Brazilian users' high resonance with dramatic social stories.",
+    "language": "pt-BR",
+    "focus": [
+        "Within the first 2 seconds, show money/number explosions (flying coins, x100 multiplier) or extreme distress (mother begging with child, being kicked out of home).",
+        "Use Funk Carioca or Sertanejo as BGM; voiceover must have passionate Brazilian accent (Carioca or Paulista), avoid European Portuguese.",
+        "High saturation, high contrast visuals; use national colors green, yellow, blue, and red-purple combos; numbers must be large with shadows; bold fonts.",
+        "Vertical video: 92% ratio; create strong visual or emotional impact within first 3 seconds (e.g., slap, kiss, grand prize reveal).",
+        "If using real person, they should be extremely excited, shouting at the camera showing grand prize, or making exaggerated expressions (e.g., wide eyes, hand over mouth).",
+        "Screen recordings should retain phone status bar, low battery indicator, or social notifications (e.g., WhatsApp messages) to boost authenticity.",
+        "Copy includes benefit inducement (\"Ganhe recompensas reais hoje!\"), intelligence challenge (\"99% dos brasileiros não conseguem.\"), or social bandwagon (\"Todo mundo está jogando isso no ônibus.\").",
+        "CTA must use \"Jogue Agora\" or \"Instale Grátis\".",
+        "Show progress bar evolution from Bronze to Diamond, or visual evolution from slum to mansion.",
+        "If mini-game loading exceeds 5 seconds, 70% of users churn; optimize loading speed within 3 seconds.",
+        "Avoid long rule explanations; users only watch visuals, ignore text."
+    ],
+    "rules": [
+        "Within first 2 seconds, show money/number explosion (e.g., x100 coins flying) or extreme distress (e.g., mother begging with child).",
+        "Must use Funk Carioca as BGM; voiceover must have passionate Brazilian accent, avoid European Portuguese.",
+        "Visuals must be high saturation and high contrast; use national colors green, yellow, blue and red-purple combos; numbers must be large with shadows.",
+        "Video must be vertical with 92% ratio; create strong visual or emotional impact within first 3 seconds.",
+        "If using real person, they should be extremely excited, shouting at camera showing grand prize.",
+        "Screen recordings must retain phone status bar, low battery indicator, or social notifications to boost authenticity.",
+        "Copy must include benefit inducement (e.g., \"Ganhe recompensas reais hoje!\"), intelligence challenge (\"99% dos brasileiros não conseguem.\") or social bandwagon (\"Todo mundo está jogando isso no ônibus.\").",
+        "CTA must use \"Jogue Agora\" or \"Instale Grátis\".",
+        "Show progress bar evolution from Bronze to Diamond.",
+        "If mini-game loading exceeds 5 seconds, 70% of users churn; optimize loading speed.",
+        "Avoid long rule explanations; users only watch visuals, ignore text."
+    ],
+    "constraints": [
+        "Materials must be adapted to Kwai platform, with a more down-to-earth style; can try 15-second localized short dramas.",
+        "Avoid European Portuguese accent, otherwise users reject.",
+        "Avoid overly complex gameplay explanations; visuals should be intuitive.",
+        "Material decay cycle is about 10-20 days; requires frequent updates."
+    ],
+    "culture_notes": [
+        "Brazilian users strongly resonate with social stories about 'wealth gap', 'betrayal', 'divorce', etc.",
+        "Kwai has a strong influence in Brazil's lower-tier market; materials need to be more down-to-earth.",
+        "Brazilian users naturally have strong performance desire; real-person footage performs well.",
+        "Taboo: avoid European Portuguese accent; avoid cold aesthetic style.",
+        "Local trending topic: combine social media popular dances into parkour background."
+    ],
+    "creative_hooks": [
+        "Desire for success: visual evolution from pauper to billionaire.",
+        "Sense of justice: punishing cheating husband or greedy boss.",
+        "Decompression satisfaction: large-scale spray painting, high-pressure water cleaning.",
+        "Benefit inducement: 'Get real rewards today!'",
+        "Intelligence challenge: '99% of Brazilians can't do it'.",
+        "Social bandwagon: 'Everyone is playing this on the bus'.",
+        "Extreme contrast: from dirty slum room to clean ASMR organization."
+    ],
+    "id": "new_region_1777020736452",
+    "category": "regions",
+    "_metadata": {
+        "version": "1.1",
+        "updated_at": "2026-04-24T08:52:55.617Z"
+    }
+}

@@ -183,22 +183,22 @@ html.dark {
 
   /* 语义化按钮：全站主/次/幽灵/成功/文字链 */
   .btn-director-primary {
-    @apply inline-flex items-center justify-center gap-2.5 min-h-10 px-5 py-2.5 rounded-ui text-sm font-extrabold text-white border border-transparent bg-gradient-to-b from-blue-500 to-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary-fixed-dim focus-visible:ring-offset-2 focus-visible:ring-offset-background cursor-pointer;
+    @apply inline-flex items-center justify-center gap-2.5 min-h-10 px-5 py-2.5 rounded-ui text-sm font-extrabold text-white border border-transparent bg-gradient-to-b from-emerald-500 to-teal-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary-fixed-dim focus-visible:ring-offset-2 focus-visible:ring-offset-background cursor-pointer;
     @apply hover:-translate-y-[1.5px] active:scale-[0.97] active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none disabled:hover:translate-y-0;
     transition-property: all;
     transition-duration: 200ms;
     transition-timing-function: var(--ease-director-out);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.25),
-      0 8px 24px -4px rgba(59, 130, 246, 0.4),
-      0 4px 8px -2px rgba(59, 130, 246, 0.3);
+      0 8px 24px -4px rgba(16, 185, 129, 0.4),
+      0 4px 8px -2px rgba(16, 185, 129, 0.3);
   }
 
   html.dark .btn-director-primary {
-    @apply bg-gradient-to-b from-blue-600 to-indigo-700;
+    @apply bg-gradient-to-b from-emerald-600 to-teal-700;
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.15),
-      0 0 24px -4px rgba(59, 130, 246, 0.4),
+      0 0 24px -4px rgba(16, 185, 129, 0.4),
       0 6px 16px -4px rgba(0, 0, 0, 0.6);
   }
 
