@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Plus, Settings2, Compass, Database, Trash2 } from 'lucide-react';
 import { useProjectContext } from '../context/ProjectContext';
 import { ProjectSetupModal } from '../components/ProjectSetupModal';
-import { ThemeAppearanceControl } from '../components/ThemeAppearanceControl';
+
 import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import systemLogo from '../assets/logo.png';
 
@@ -15,7 +15,7 @@ import { OracleIngestion } from './OracleIngestion';
 import { MatrixConsole } from './MatrixConsole';
 
 export const WorkspaceHub: React.FC = () => {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const { projects, setCurrentProject, deleteProject, isLoading } = useProjectContext();
@@ -68,19 +68,43 @@ export const WorkspaceHub: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#f4f7f5] text-on-background flex flex-col relative overflow-hidden font-sans selection:bg-emerald-200">
+    <motion.div 
+      initial={{ opacity: 0, filter: 'blur(10px)' }}
+      animate={{ opacity: 1, filter: 'blur(0px)' }}
+      exit={{ opacity: 0, filter: 'blur(10px)' }}
+      transition={{ duration: 0.6, ease: 'easeOut' }}
+      className="min-h-screen bg-[#f4f7f5] text-on-background flex flex-col relative overflow-hidden font-sans selection:bg-emerald-200"
+    >
       
       {/* 1. Precise Graph Paper Background */}
-      <div 
-        className="absolute inset-0 pointer-events-none z-0"
+      <motion.div 
+        className="absolute inset-0 pointer-events-none z-0 opacity-80"
         style={{
           backgroundImage: `linear-gradient(to right, rgba(58, 166, 104, 0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(58, 166, 104, 0.08) 1px, transparent 1px)`,
           backgroundSize: '40px 40px'
         }}
+        animate={{ backgroundPosition: ['0px 0px', '40px 40px'] }}
+        transition={{ repeat: Infinity, duration: 10, ease: "linear" }}
       />
       {/* Ultra-soft ambient gradients matching the image */}
-      <div className="absolute top-[-20%] right-[-10%] w-[800px] h-[800px] rounded-full bg-gradient-to-bl from-[#e0f0e6]/60 to-transparent blur-3xl pointer-events-none" />
-      <div className="absolute bottom-[-20%] left-[-10%] w-[800px] h-[800px] rounded-full bg-gradient-to-tr from-[#e0f0e6]/50 to-transparent blur-3xl pointer-events-none" />
+      <motion.div 
+        className="absolute top-[-20%] right-[-10%] w-[800px] h-[800px] rounded-full bg-gradient-to-bl from-[#e0f0e6]/60 to-transparent blur-3xl pointer-events-none" 
+        animate={{ 
+          x: [0, -40, 20, 0], 
+          y: [0, 30, -30, 0],
+          scale: [1, 1.05, 0.95, 1]
+        }}
+        transition={{ repeat: Infinity, duration: 18, ease: "easeInOut" }}
+      />
+      <motion.div 
+        className="absolute bottom-[-20%] left-[-10%] w-[800px] h-[800px] rounded-full bg-gradient-to-tr from-[#e0f0e6]/50 to-transparent blur-3xl pointer-events-none" 
+        animate={{ 
+          x: [0, 30, -20, 0], 
+          y: [0, -40, 20, 0],
+          scale: [1, 1.05, 0.95, 1]
+        }}
+        transition={{ repeat: Infinity, duration: 22, ease: "easeInOut" }}
+      />
 
       {/* 2. Top Navigation Bar */}
       <header className="relative z-10 w-full px-6 py-4 flex items-center justify-between border-b border-transparent">
@@ -106,32 +130,27 @@ export const WorkspaceHub: React.FC = () => {
             className="flex items-center gap-[6px] px-5 py-[10px] rounded-full bg-white hover:bg-[#f8fbf9] border border-[#e8f3ec] hover:border-emerald-200 shadow-[0_2px_10px_rgba(0,0,0,0.02)] transition-all text-[#4a5f54]"
           >
             <Compass className="w-[14px] h-[14px] text-[#3aa668]" strokeWidth={2.5} />
-            <span className="text-[12px] font-bold tracking-wider">知识库</span>
+            <span className="text-[12px] font-bold tracking-wider">{t('nav.oracle', 'Oracle')}</span>
           </button>
           <button
             onClick={() => setShowMatrixModal(true)}
             className="flex items-center gap-[6px] px-5 py-[10px] rounded-full bg-white hover:bg-[#f8fbf9] border border-[#e8f3ec] hover:border-emerald-200 shadow-[0_2px_10px_rgba(0,0,0,0.02)] transition-all text-[#4a5f54]"
           >
             <Database className="w-[14px] h-[14px] text-[#3aa668]" strokeWidth={2.5} />
-            <span className="text-[12px] font-bold tracking-wider">策略因子</span>
+            <span className="text-[12px] font-bold tracking-wider">{t('nav.settings', 'Settings')}</span>
           </button>
           <button
             onClick={() => setShowProviderModal(true)}
             className="flex items-center gap-[6px] px-5 py-[10px] rounded-full bg-white hover:bg-[#f8fbf9] border border-[#e8f3ec] hover:border-emerald-200 shadow-[0_2px_10px_rgba(0,0,0,0.02)] transition-all text-[#4a5f54]"
           >
             <Settings2 className="w-[14px] h-[14px] text-[#3aa668]" strokeWidth={2.5} />
-            <span className="text-[12px] font-bold tracking-wider">大模型接入</span>
+            <span className="text-[12px] font-bold tracking-wider">{t('nav.providers', 'Providers')}</span>
           </button>
         </div>
 
         {/* Right: Controls perfectly matched to image */}
         <div className="flex items-center gap-[10px]">
-          <button 
-             className="flex items-center justify-center h-[34px] px-3 rounded-full bg-[#ebeef0] hover:bg-[#e2e5e7] transition-colors border border-transparent"
-             onClick={() => i18n.changeLanguage(i18n.language?.startsWith('zh') ? 'en' : 'zh')}
-          >
-             <span className="text-[11px] font-bold text-[#627068] tracking-widest">{i18n.language?.startsWith('zh') ? '文 中' : 'A EN'}</span>
-          </button>
+          <LanguageSwitcher variant="hub" />
           
           <button className="flex items-center justify-center w-[34px] h-[34px] rounded-full bg-[#ebeef0] hover:bg-[#e2e5e7] transition-colors border border-transparent">
              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#627068" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -147,8 +166,8 @@ export const WorkspaceHub: React.FC = () => {
       <main className="relative z-10 flex-1 w-full flex flex-col overflow-y-auto">
          {/* Top-Left Title */}
          <div className="pt-10 px-[60px] lg:px-[120px] mb-[40px] z-10">
-            <h1 className="text-[36px] font-black text-[#111827] tracking-tight mb-[8px]">我的工作区</h1>
-            <p className="text-[12px] font-medium tracking-wider text-[#8a9891]">管理游戏档案、资产和 SOP 引擎节点。</p>
+            <h1 className="text-[36px] font-black text-[#111827] tracking-tight mb-[8px]">{t('hub.title', 'My Workspace')}</h1>
+            <p className="text-[12px] font-medium tracking-wider text-[#8a9891]">{t('hub.subtitle', 'Manage your game archives, assets, and SOP engines.')}</p>
          </div>
 
          {/* 4. Elegant Loading State */}
@@ -158,7 +177,7 @@ export const WorkspaceHub: React.FC = () => {
                  <circle cx="25" cy="25" r="22" fill="none" stroke="#e0e6e2" strokeWidth="1.5" />
                  <circle cx="25" cy="25" r="22" fill="none" stroke="#3aa668" strokeWidth="1.5" strokeDasharray="35 150" strokeLinecap="round" />
                </svg>
-               <span className="mt-5 text-[12px] font-bold text-[#6b7571] tracking-widest">载入全局架构...</span>
+               <span className="mt-5 text-[12px] font-bold text-[#6b7571] tracking-widest">{t('hub.loading_matrix', 'Loading matrix...')}</span>
             </div>
          ) : (
             <motion.div 
@@ -296,6 +315,6 @@ export const WorkspaceHub: React.FC = () => {
 
       {/* Render the modal at this level so it mounts */}
       <ProjectSetupModal isOpen={isSetupModalOpen} onClose={() => setIsSetupModalOpen(false)} editTarget={editProject} />
-    </div>
+    </motion.div>
   );
 };

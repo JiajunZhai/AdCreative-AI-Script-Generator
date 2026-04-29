@@ -484,7 +484,9 @@
       "submit": "Initialize Workspace",
       "submit_edit": "Save Changes",
       "translate": "AI Translate",
-      "translating": "Translating Matrix..."
+      "translating": "Translating Matrix...",
+      "export_json": "Export JSON",
+      "import_json": "Import JSON"
     },
     "param_manager": {
       "hub_title": "Matrix Parameter Hub",

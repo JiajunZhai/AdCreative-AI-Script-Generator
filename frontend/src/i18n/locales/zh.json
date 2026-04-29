@@ -483,7 +483,9 @@
       "submit": "确认创建档案",
       "submit_edit": "应用覆盖数据",
       "translate": "AI 翻译",
-      "translating": "全矩阵翻译中..."
+      "translating": "全矩阵翻译中...",
+      "export_json": "导出 JSON",
+      "import_json": "导入 JSON"
     },
     "param_manager": {
       "hub_title": "策略因子",

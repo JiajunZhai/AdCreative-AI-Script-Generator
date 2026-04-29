@@ -1,44 +1,24 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, Activity, RefreshCw, History, Save, ListChecks, ListPlus, X, Settings, Network, Target, Globe, Wand2, Clock, Film, MessageSquare, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Activity, Save, ListChecks, ListPlus, X, Settings, Network, Target, Globe, Wand2, Clock, Film, MessageSquare, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API_BASE } from '../config/apiBase';
 import { useProjectContext } from '../context/ProjectContext';
-import { useShellActivity } from '../context/ShellActivityContext';
+
 import { useTranslation } from 'react-i18next';
-import { ResultDashboardView } from '../components/ResultDashboardView';
 import { useLabQueue, type QueueJobPayload } from '../hooks/useLabQueue';
-import { HistoryFeedDrawer } from '../components/HistoryFeedDrawer';
 import { QueueDrawer } from '../components/lab/QueueDrawer';
 import { PresetsDrawer } from '../components/lab/PresetsDrawer';
 import { LabHeader } from '../components/lab/LabHeader';
 import { StrategyConsole } from '../components/lab/StrategyConsole';
 import { ProSelect } from '../components/ProSelect';
 
-const estimateTTSDuration = (text: string, lang: string): number => {
-  if (!text) return 0;
-  const cleanText = text.replace(/[\s\p{P}]/gu, '');
-  if (['cn', 'jp', 'kr', 'tw'].includes(lang)) {
-    return Math.ceil(cleanText.length / 4.5);
-  } else {
-    const words = text.trim().split(/\s+/).length;
-    return Math.ceil(words / 2.5);
-  }
-};
 
-const parseAllocatedSeconds = (timeStr: string): number => {
-  if (!timeStr) return 0;
-  const matches = timeStr.match(/(\d+)/g);
-  if (!matches) return 0;
-  if (matches.length === 1) return parseInt(matches[0], 10);
-  if (matches.length >= 2) return Math.abs(parseInt(matches[1], 10) - parseInt(matches[0], 10));
-  return 0;
-};
 
 export const Lab: React.FC = () => {
   const { currentProject } = useProjectContext();
-  const { setGeneratorShell } = useShellActivity();
+
   const { t } = useTranslation();
   const navigate = useNavigate();
 
@@ -61,30 +41,17 @@ export const Lab: React.FC = () => {
   const [synthesisMode, setSynthesisMode] = useState<'auto' | 'draft' | 'director'>('auto');
   const [complianceSuggest] = useState<boolean>(true);
 
-  const [isSynthesizing, setIsSynthesizing] = useState(false);
-  const [synthesisResult, setSynthesisResult] = useState<any>(null);
-  const [dashboardOpen, setDashboardOpen] = useState(false);
-  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
-
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
 
   // Intel Constraint Overlay
   const [intelConstraint, setIntelConstraint] = useState<string>('');
 
-  const [refineInstruction, setRefineInstruction] = useState('');
-  const [isRefining, setIsRefining] = useState(false);
 
   const [noKeyConfigured, setNoKeyConfigured] = useState(false);
   const [providerWarning, setProviderWarning] = useState<string | null>(null);
   const [infoToast, setInfoToast] = useState<{message: string, isFailover?: boolean} | null>(null);
 
-  const handleScriptEdit = (idx: number, field: string, value: string) => {
-    if (!synthesisResult || !synthesisResult.script) return;
-    const nextScript = [...synthesisResult.script];
-    nextScript[idx] = { ...nextScript[idx], [field]: value };
-    setSynthesisResult({ ...synthesisResult, script: nextScript });
-  };
 
   const currentPayloadBuilder = useCallback((): QueueJobPayload | null => {
     if (!currentProject || !regionId || !platformId || !angleId) return null;
@@ -103,26 +70,6 @@ export const Lab: React.FC = () => {
     };
   }, [currentProject, regionId, platformId, angleId, engineProvider, engineModel, outputMode, complianceSuggest, synthesisMode]);
 
-  const handleRefine = async () => {
-    if (!synthesisResult?.script_id || !refineInstruction.trim()) return;
-    setIsRefining(true);
-    try {
-      const payload = {
-        script_id: synthesisResult.script_id,
-        instruction: refineInstruction,
-        current_script: synthesisResult.script
-      };
-      const res = await axios.post(`${API_BASE}/api/generate/refine`, payload);
-      setSynthesisResult(res.data);
-      setRefineInstruction('');
-    } catch (err: any) {
-      if (!axios.isCancel(err)) {
-        setErrorToast(err.response?.data?.detail?.error_message || 'Refinement failed');
-      }
-    } finally {
-      setIsRefining(false);
-    }
-  };
 
   useEffect(() => {
     const checkIntel = () => {
@@ -175,9 +122,6 @@ export const Lab: React.FC = () => {
     }).catch(err => console.error("Metadata fetch failed", err));
   }, []);
 
-  useEffect(() => {
-    setGeneratorShell(isSynthesizing, isSynthesizing ? t('lab.synthesis_status') : '');
-  }, [isSynthesizing, setGeneratorShell, t]);
 
   const modeOptions = useMemo(() => [
     { value: 'auto', label: t('lab.mode_auto', 'Auto (AI 接管)') },
@@ -199,96 +143,6 @@ export const Lab: React.FC = () => {
     { value: '8-12', label: t('lab.scenes_long', '8-12个分镜') },
   ], [t]);
 
-  const handleSynthesize = async () => {
-    if (!currentProject) return;
-    setIsSynthesizing(true);
-    setSynthesisResult(null);
-    try {
-      const payloadBase: any = {
-        project_id: currentProject.id,
-        region_id: regionId,
-        platform_id: platformId,
-        angle_id: angleId,
-        engine: "cloud",
-        output_mode: outputMode,
-        compliance_suggest: complianceSuggest,
-      };
-      if (videoDuration !== 'auto') payloadBase.video_duration = videoDuration;
-      if (sceneCount !== 'auto') payloadBase.scene_count = sceneCount;
-      if (intelConstraint) payloadBase.intel_constraint = intelConstraint;
-      if (userPrompt.trim()) payloadBase.intel_constraint = (payloadBase.intel_constraint ? payloadBase.intel_constraint + "\n" : "") + userPrompt.trim();
-      if (engineProvider) payloadBase.engine_provider = engineProvider;
-      if (engineModel) payloadBase.engine_model = engineModel;
-
-      const targetMode = synthesisMode;
-      const response = await axios.post(`${API_BASE}/api/generate`, { ...payloadBase, mode: targetMode });
-      
-      if (!isMounted.current) return;
-      setSynthesisResult(response.data);
-      
-      if (response.data?.generation_metrics?.failover_notice) {
-        setInfoToast({
-          message: `${t('lab.failover_notice', '当前线路拥堵，已自动切换至备用引擎')} ${response.data.generation_metrics.failover_notice} ${t('lab.continue_generation', '继续生成...')}`,
-          isFailover: true
-        });
-      }
-      
-      setDashboardOpen(true);
-    } catch (e: any) {
-      if (!isMounted.current) return;
-      let msg = t('lab.errors.synthesis_failed') as string;
-      if (e.response?.data?.detail) {
-        if (typeof e.response.data.detail === 'string') {
-          msg = e.response.data.detail;
-        } else if (e.response.data.detail?.error_code) {
-          msg = `[${e.response.data.detail.error_code}] ${e.response.data.detail.error_message || ''}`;
-        }
-      }
-      setErrorToast(msg);
-    } finally { 
-      if (isMounted.current) setIsSynthesizing(false); 
-    }
-  };
-
-  const handleSelectDraft = async (draft: any) => {
-    if (!currentProject) return;
-    setIsSynthesizing(true);
-    try {
-      const payloadBase: any = {
-        project_id: currentProject.id,
-        region_id: regionId,
-        platform_id: platformId,
-        angle_id: angleId,
-        engine: "cloud",
-        output_mode: outputMode,
-        compliance_suggest: complianceSuggest,
-        mode: "director",
-        selected_draft_payload: draft,
-      };
-      if (videoDuration !== 'auto') payloadBase.video_duration = videoDuration;
-      if (sceneCount !== 'auto') payloadBase.scene_count = sceneCount;
-      if (intelConstraint) payloadBase.intel_constraint = intelConstraint;
-      if (userPrompt.trim()) payloadBase.intel_constraint = (payloadBase.intel_constraint ? payloadBase.intel_constraint + "\n" : "") + userPrompt.trim();
-        if (engineProvider) payloadBase.engine_provider = engineProvider;
-        if (engineModel) payloadBase.engine_model = engineModel;
-        const response = await axios.post(`${API_BASE}/api/generate`, payloadBase);
-        
-        if (!isMounted.current) return;
-        setSynthesisResult(response.data);
-        
-        if (response.data?.generation_metrics?.failover_notice) {
-          setInfoToast({
-            message: `${t('lab.failover_notice', '当前线路拥堵，已自动切换至备用引擎')} ${response.data.generation_metrics.failover_notice} ${t('lab.continue_generation', '继续生成...')}`,
-            isFailover: true
-          });
-        }
-      } catch (e: any) {
-      if (!isMounted.current) return;
-      setErrorToast('Failed to generate final script from draft.');
-    } finally {
-      if (isMounted.current) setIsSynthesizing(false);
-    }
-  };
 
   const buildCurrentPayload = useCallback((): QueueJobPayload | null => {
     if (!currentProject) return null;
@@ -304,7 +158,7 @@ export const Lab: React.FC = () => {
 
   const labQueue = useLabQueue('script');
 
-  const isQuickCopyResult = useMemo(() => synthesisResult && synthesisResult.ad_copy_matrix && !Array.isArray(synthesisResult.script), [synthesisResult]);
+
 
   const isDnaMatched = useMemo(() => {
     if (!currentProject || !regionId || !platformId || !metadata.regions || !metadata.platforms) return false;
@@ -396,12 +250,7 @@ export const Lab: React.FC = () => {
         )}
       </AnimatePresence>
 
-      <ResultDashboardView
-        open={dashboardOpen}
-        onClose={() => setDashboardOpen(false)}
-        result={synthesisResult}
-        onResultUpdate={(next) => setSynthesisResult(next)}
-      />
+
 
       <header className="shrink-0 border-b border-outline-variant/20 bg-surface-container-lowest/80 backdrop-blur-xl px-6 py-4 relative z-20 shadow-sm">
         <LabHeader
@@ -586,36 +435,21 @@ export const Lab: React.FC = () => {
                   navigate('/hub', { state: { openProviders: true } });
                   return;
                 }
-                handleSynthesize();
+                const payload = currentPayloadBuilder();
+                if (payload) {
+                  labQueue.addJob(payload, `Job: ${currentProject?.name}`);
+                  setQueueOpen(true);
+                }
               }}
-              disabled={isSynthesizing || !currentProject || !regionId}
+              disabled={!currentProject || !regionId}
               whileHover={{ scale: 1.01 }}
               whileTap={{ scale: 0.98 }}
               className={`flex-1 py-4 text-[13px] font-bold tracking-widest flex items-center justify-center gap-3 rounded-[12px] bg-gradient-to-r from-[#0da678] to-[#128a65] text-white shadow-[0_4px_20px_rgba(13,166,120,0.3)] hover:shadow-[0_6px_24px_rgba(13,166,120,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed ${noKeyConfigured ? 'grayscale opacity-80 cursor-not-allowed hover:shadow-none' : ''}`}
             >
-              {isSynthesizing ? <RefreshCw className="animate-spin w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
+              <ListPlus className="w-5 h-5 fill-white/20" />
               {noKeyConfigured 
                 ? t('lab.no_key_configured', '未配置 Key') 
-                : (isSynthesizing ? t('lab.syncing', '正在生成...') : t('lab.initiate_synthesis', '开始生成'))}
-            </motion.button>
-
-            <motion.button
-              onClick={() => {
-                if (noKeyConfigured) {
-                  navigate('/hub', { state: { openProviders: true } });
-                  return;
-                }
-                const payload = currentPayloadBuilder();
-                if (payload) labQueue.addJob(payload, `Job: ${currentProject?.name}`);
-              }}
-              disabled={isSynthesizing || !currentProject || !regionId}
-              whileHover={{ scale: 1.01 }}
-              whileTap={{ scale: 0.98 }}
-              className={`w-[140px] py-4 text-[13px] font-bold tracking-widest flex items-center justify-center gap-2 rounded-[12px] bg-white border border-[#e8ecea] text-[#1a5d3f] shadow-sm hover:bg-[#f8faf9] hover:border-[#3aa668]/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed ${noKeyConfigured ? 'grayscale opacity-80 cursor-not-allowed' : ''}`}
-              title={t('lab.presets_enqueue', '加入队列') as string}
-            >
-              <ListPlus className="w-4 h-4" />
-              {t('lab.presets_enqueue', '加入队列')}
+                : t('lab.presets_enqueue', '加入队列生成')}
             </motion.button>
 
             <button
@@ -647,7 +481,7 @@ export const Lab: React.FC = () => {
           <div className="shrink-0 p-4 border-b border-outline-variant/30 bg-surface-container-low/50">
             <StrategyConsole
               title={t('lab.resonance_feed', 'Parameter Resonance')}
-              titleIcon={<Activity className={isSynthesizing ? 'animate-pulse text-primary' : 'w-3.5 h-3.5 text-primary'} />}
+              titleIcon={<Activity className="w-3.5 h-3.5 text-primary" />}
               headerAction={
                 <div className="flex items-center gap-2">
                   {isDnaMatched ? (
@@ -659,13 +493,6 @@ export const Lab: React.FC = () => {
                       <Globe className="w-2.5 h-2.5" /> Generic Target
                     </div>
                   )}
-                  <button
-                    onClick={() => setHistoryDrawerOpen(true)}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded border border-outline-variant/30 hover:bg-surface-container hover:text-primary transition-colors text-[9px] uppercase tracking-widest font-bold text-on-surface-variant"
-                  >
-                    <History className="w-3 h-3" />
-                    {t('lab.history_feed', 'History Feed')}
-                  </button>
                 </div>
               }
               metadata={metadata}
@@ -678,7 +505,6 @@ export const Lab: React.FC = () => {
           <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
             <div className="p-4">
               <AnimatePresence mode="wait">
-                {!synthesisResult ? (
                   <motion.div key="preview" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-full flex flex-col gap-4">
                     {isPreviewLoading ? (
                       <div className="flex flex-col gap-4 h-full">
@@ -791,109 +617,11 @@ export const Lab: React.FC = () => {
                       </div>
                     )}
                   </motion.div>
-                ) : (
-                  <motion.div key="result" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-3">
-                    {synthesisResult?.generation_metrics?.mode === 'draft' ? (
-                      <div className="space-y-4">
-                        <div className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest flex items-center gap-2 mb-4">
-                          <Activity className="w-3.5 h-3.5" /> {t('lab.draft_selection', 'Select Direction (Drafts)')}
-                        </div>
-                        {synthesisResult.drafts?.map((draft: any, idx: number) => (
-                          <div key={idx} className="bg-surface-container-low border border-outline-variant/30 rounded-xl p-4 shadow-sm hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => handleSelectDraft(draft)}>
-                            <div className="flex justify-between items-start mb-2">
-                              <div className="text-[12px] font-bold text-on-surface group-hover:text-primary transition-colors">{draft.title || draft.hook}</div>
-                              <div className="flex gap-2">
-                                <div className="text-[9px] font-mono bg-surface-container text-primary px-1.5 py-0.5 rounded border border-primary/20">CTR {draft.estimated_ctr || '--'}</div>
-                                <div className="text-[9px] font-mono bg-surface-container text-secondary px-1.5 py-0.5 rounded border border-secondary/20">QLTY {draft.estimated_quality || '--'}</div>
-                              </div>
-                            </div>
-                            <div className="text-[11px] text-on-surface-variant mb-3 leading-relaxed">{draft.story_arc || draft.gameplay_bridge}</div>
-                            {draft.reasoning && (
-                              <div className="text-[10px] text-secondary/80 bg-secondary/5 border border-secondary/10 p-2 rounded-lg italic mb-2">
-                                💡 {draft.reasoning}
-                              </div>
-                            )}
-                            {draft.risk_flags && draft.risk_flags.length > 0 && (
-                              <div className="flex gap-1 flex-wrap">
-                                {draft.risk_flags.map((flag: string, i: number) => (
-                                  <span key={i} className="text-[9px] text-red-400 bg-red-400/10 px-1.5 py-0.5 rounded">{flag}</span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : isQuickCopyResult ? (
-                      <div className="text-[11px] font-bold text-on-surface-variant text-center py-10">{t('lab.matrix_compiled', 'Matrix compiled. Check Dashboard.')}</div>
-                    ) : synthesisResult.script?.map((line: any, idx: number) => {
-                      const allocatedSec = parseAllocatedSeconds(line.time);
-                      const estimatedSec = estimateTTSDuration(line.audio_content, outputMode);
-                      const isOverflow = allocatedSec > 0 && estimatedSec > allocatedSec * 1.1;
-
-                      return (
-                        <div key={idx} className={`bg-surface-container-lowest border rounded-xl p-3 shadow-sm group transition-colors ${isOverflow ? 'border-red-500/50 shadow-[0_0_10px_rgba(239,68,68,0.1)]' : 'border-outline-variant/30 hover:border-primary/30'}`}>
-                          <div className="text-[10px] font-black text-primary mb-1.5 uppercase flex justify-between items-center">
-                            <span>[{line.time}]</span>
-                            <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[9px] text-on-surface-variant font-medium lowercase">Editable Block</span>
-                          </div>
-                          <textarea
-                            value={line.visual}
-                            onChange={(e) => handleScriptEdit(idx, 'visual', e.target.value)}
-                            className="w-full bg-transparent text-[12px] font-medium leading-relaxed mb-2 outline-none border border-transparent hover:border-outline-variant/30 focus:border-primary/50 focus:bg-surface-container-low rounded-lg p-1.5 resize-none transition-all"
-                            rows={Math.max(2, Math.ceil(line.visual.length / 50))}
-                          />
-                          <textarea
-                            value={line.audio_content}
-                            onChange={(e) => handleScriptEdit(idx, 'audio_content', e.target.value)}
-                            className={`w-full text-[11px] italic bg-surface-container/50 border rounded-lg p-2 outline-none resize-none transition-all ${isOverflow ? 'text-red-400 border-red-500/30 focus:border-red-500 focus:bg-red-500/5' : 'text-on-surface-variant border-transparent hover:border-outline-variant/30 focus:border-primary/50 focus:bg-surface-container-low'}`}
-                            rows={Math.max(2, Math.ceil(line.audio_content.length / 50))}
-                          />
-                          <div className="flex justify-end mt-1">
-                            <div className={`text-[9px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1 ${isOverflow ? 'bg-red-500/10 text-red-500 border border-red-500/20' : 'bg-surface-container text-on-surface-variant/70'}`}>
-                              TTS: ~{estimatedSec}s / {allocatedSec > 0 ? `${allocatedSec}s` : '???'}
-                              {isOverflow && <span className="font-bold">⚠️ OVERFLOW</span>}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {!isQuickCopyResult && synthesisResult?.script && (
-                      <div className="mt-4 pt-4 border-t border-outline-variant/20">
-                        <div className="bg-surface-container-low border border-outline-variant/30 rounded-xl p-3 flex flex-col gap-3 shadow-sm">
-                          <div className="text-[10px] font-bold tracking-widest uppercase text-secondary flex items-center gap-2">
-                            <Activity className="w-3.5 h-3.5" /> {t('lab.refine_instruction', 'Refinement Instruction')}
-                          </div>
-                          <textarea
-                            value={refineInstruction}
-                            onChange={(e) => setRefineInstruction(e.target.value)}
-                            placeholder={t('lab.refine_placeholder', 'e.g., Make the ending more dramatic...')}
-                            className="w-full bg-surface text-[12px] text-on-surface border border-outline-variant/30 rounded-lg p-2 outline-none focus:border-secondary/50 resize-none"
-                            rows={2}
-                          />
-                          <div className="flex justify-end gap-2">
-                            <button
-                              onClick={handleRefine}
-                              disabled={isRefining || !refineInstruction.trim()}
-                              className="btn-director-secondary px-4 py-1.5 text-[11px] font-bold disabled:opacity-50 flex items-center gap-2"
-                            >
-                              {isRefining && <RefreshCw className="w-3 h-3 animate-spin" />}
-                              {t('lab.btn_refine', 'Refine Script')}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    <button onClick={() => setSynthesisResult(null)} className="w-full py-3 mt-4 border border-outline-variant/30 text-[10px] uppercase font-black tracking-widest text-on-surface-variant bg-surface-container-low/30 hover:bg-surface-container-low transition-all">{t('lab.reset_feed', 'Reset Feed')}</button>
-                  </motion.div>
-                )}
               </AnimatePresence>
             </div>
           </div>
         </div>
       </div>
-      <HistoryFeedDrawer isOpen={historyDrawerOpen} onClose={() => setHistoryDrawerOpen(false)} filterType="SOP" />
       <QueueDrawer
         isOpen={queueOpen}
         onClose={() => setQueueOpen(false)}

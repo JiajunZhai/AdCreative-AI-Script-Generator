@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Shield, Clapperboard, Loader2, Link as LinkIcon, Type, Zap, Folder, Target, Eye, Trophy, Users, Swords, Languages } from 'lucide-react';
+import { X, Shield, Clapperboard, Loader2, Link as LinkIcon, Type, Zap, Folder, Target, Eye, Trophy, Users, Swords, Languages, Download, Upload } from 'lucide-react';
 import axios from 'axios';
 import { API_BASE } from '../config/apiBase';
 import { useProjectContext, type GameInfo, type Project } from '../context/ProjectContext';
@@ -32,6 +32,8 @@ export const ProjectSetupModal: React.FC<ProjectSetupModalProps> = ({ isOpen, on
     usp: {}
   });
   const [compSetInput, setCompSetInput] = useState('');
+  
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -198,6 +200,53 @@ export const ProjectSetupModal: React.FC<ProjectSetupModalProps> = ({ isOpen, on
           setTranslateProgress(0);
        }, 300);
     }
+  };
+
+  const handleExportJson = () => {
+     const compSet = compSetInput.split(',').map(s => s.trim()).filter(Boolean);
+     const exportData = {
+        name: name.trim(),
+        game_info: { ...gameInfo, competitive_set: compSet }
+     };
+     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
+     const downloadAnchorNode = document.createElement('a');
+     downloadAnchorNode.setAttribute("href", dataStr);
+     downloadAnchorNode.setAttribute("download", `${name.trim() || 'workspace_dna'}.json`);
+     document.body.appendChild(downloadAnchorNode);
+     downloadAnchorNode.click();
+     downloadAnchorNode.remove();
+  };
+
+  const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+     const file = e.target.files?.[0];
+     if (!file) return;
+     const reader = new FileReader();
+     reader.onload = (event) => {
+        try {
+           const jsonStr = event.target?.result as string;
+           const parsed = JSON.parse(jsonStr);
+           if (parsed.name) setName(parsed.name);
+           if (parsed.game_info) {
+              setGameInfo(prev => ({
+                 ...prev,
+                 core_loop: parsed.game_info.core_loop || prev.core_loop,
+                 persona: parsed.game_info.persona || prev.persona,
+                 visual_dna: parsed.game_info.visual_dna || prev.visual_dna,
+                 competitive_set: parsed.game_info.competitive_set || prev.competitive_set,
+                 usp: { ...prev.usp, ...(parsed.game_info.usp || {}) }
+              }));
+              if (parsed.game_info.competitive_set && Array.isArray(parsed.game_info.competitive_set)) {
+                 setCompSetInput(parsed.game_info.competitive_set.join(', '));
+              }
+           }
+        } catch (error) {
+           console.error("Failed to parse imported JSON:", error);
+           alert("Invalid JSON file.");
+        }
+     };
+     reader.readAsText(file);
+     // Reset input so the same file can be selected again
+     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleSave = async () => {
@@ -505,6 +554,31 @@ export const ProjectSetupModal: React.FC<ProjectSetupModalProps> = ({ isOpen, on
             </button>
             {mode === 'manual' && (
                <>
+                  <input
+                     type="file"
+                     accept=".json"
+                     ref={fileInputRef}
+                     onChange={handleImportJson}
+                     className="hidden"
+                  />
+                  <div className="flex gap-2 mr-auto">
+                     <button 
+                        onClick={() => fileInputRef.current?.click()} 
+                        disabled={isTranslating}
+                        className="px-4 py-2.5 rounded-[12px] bg-slate-500/10 hover:bg-slate-500/20 border border-slate-500/20 text-slate-600 dark:text-slate-400 font-bold text-[12px] uppercase tracking-widest transition-colors flex items-center gap-2 disabled:opacity-50"
+                     >
+                        <Upload className="w-4 h-4" />
+                        {t('setup.import_json', 'Import')}
+                     </button>
+                     <button 
+                        onClick={handleExportJson} 
+                        disabled={isTranslating}
+                        className="px-4 py-2.5 rounded-[12px] bg-slate-500/10 hover:bg-slate-500/20 border border-slate-500/20 text-slate-600 dark:text-slate-400 font-bold text-[12px] uppercase tracking-widest transition-colors flex items-center gap-2 disabled:opacity-50"
+                     >
+                        <Download className="w-4 h-4" />
+                        {t('setup.export_json', 'Export')}
+                     </button>
+                  </div>
                   <button 
                      onClick={handleTranslate} 
                      disabled={isTranslating}

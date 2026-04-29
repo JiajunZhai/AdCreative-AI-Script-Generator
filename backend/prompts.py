@@ -219,12 +219,12 @@ def render_director_prompt(
     3. 严禁使用虚假的系统原生 UI（如低电量警告、系统弹窗等）。
     4. Hook 可以很夸张，但必须在 1-2 个镜头内与游戏真实玩法逻辑接轨。
 
-    【结果要求：导演潜台词】
-    输出不仅仅是画面对白，必须包含你的“导演潜台词”！
-    在 JSON 的 `hook_reasoning` / `bgm_direction` / `editing_rhythm` 以及每个分镜的 `direction_note` 中，必须明确指出：
-    - 为什么要这么剪？（背后的心理暗示是什么？）
-    - 为什么用这个 BGM 或音效？（要渲染什么样的情绪？）
-    - 这个动作为什么能引发点击和转化？
+    【结果要求：剪辑技术化指令】
+    输出不能是假大空的“环境描写”，必须是能让剪辑师直接落地的“技术语言”！
+    在 JSON 的 `hook_reasoning` / `bgm_direction` / `editing_rhythm` 中，必须明确：
+    - 具体用到哪些剪辑手法？（跳切、震屏、放大150%等）
+    - 具体的音效和配乐指令？（TTS合成音、特定ASMR音效等）
+    - 关联了近期哪些爆火的 TikTok 热点/梗？
 
     [INPUT HANDLING]
     {INJECTION_GUARD}
@@ -260,17 +260,12 @@ def render_director_prompt(
         }},
         "script": [
             {{
-                "time": "0s",
-                "visual": "<{target_lang} shot description for production>",
-                "visual_meaning": "<{target_lang} director-facing visual instruction>",
-                "audio_content": "<ACTUAL {target_lang} Voiceover text>",
-                "audio_meaning": "<{target_lang} meaning + delivery emotion guidance>",
-                "text_content": "<Sticker Text in {target_lang} (impactful on-screen sticker words, MUST be present for every shot)>",
-                "text_meaning": "<{target_lang} meaning of Sticker Text>",
-                "sticker_text": "<same as text_content (explicit sticker field, MUST be present)>",
-                "sticker_meaning": "<same as text_meaning ({target_lang} meaning)>",
-                "direction_note": "<{target_lang} director note: pacing/camera/performance>",
-                "sfx_transition_note": "<{target_lang} post note: SFX, pause, transition, beat>"
+                "time": "0-1.5s",
+                "visual_asset": "<{target_lang} clear instructions on what gameplay to record or what stock footage to use (e.g., 'Record a Lv.1 defeat screen')>",
+                "vfx_and_cut": "<{target_lang} technical editing instructions (e.g., 'Add CapCut camera shake', 'Jump cut', 'Zoom in 150%')>",
+                "audio_sfx": "<{target_lang} precise VO text AND specific sound effects (e.g., 'TTS: Oh no! + Glass shatter SFX')>",
+                "sticker_text": "<{target_lang} impactful on-screen text/sticker>",
+                "reference_trend": "<{target_lang} which current TikTok trend/meme this shot is referencing>"
             }}
         ],
         "psychology_insight": "<str>",
@@ -278,11 +273,16 @@ def render_director_prompt(
         "competitor_trend": "<str>"
     }}
 
-    HARD REQUIREMENTS:
-    - For EVERY shot, you MUST output Sticker Text fields: text_content/text_meaning AND sticker_text/sticker_meaning (they can be identical).
+    HARD REQUIREMENTS (UA Strict Rules):
+    - Pacing Overhaul (破除匀速剪辑): Do NOT use uniform 3-second shots. The Hook MUST be front-loaded (maximum 1.5 seconds) with immediate conflict or failure. Subsequent shots must use fast-paced jump cuts to escalate the climax, followed by a tight 1-2s ending.
+    - TikTok Native Audio/Visuals (视听原生感): Avoid slow transitions, delicate expressions, or epic symphonies. You MUST use high-saturation UI, exaggerated damage numbers, native TTS (e.g., exaggerated voiceovers), and ASMR/pachinko-style sound effects.
+    - Visual Bridge (玩法融合): If the narrative hook (e.g., saving someone) differs from the core gameplay (e.g., breaking nodes), you MUST provide a logical "Visual Bridge" (e.g., define nodes as toxic gas vents).
+    - Fail State Ending: End the script with an unresolved "Fail State" or cliffhanger (e.g., "Damage insufficient") right before success to drive downloads. Do NOT use satisfying "Happy Endings".
+    - For EVERY shot, you MUST output Sticker Text fields.
     - Sticker Text must be visually punchy: short, high-contrast, clickable (examples: "LEVEL 1 vs LEVEL 99", "HUGE WIN", "SCAM?", "DON'T DO THIS").
     - The first 3 seconds (usually shot 1-2) Sticker Text MUST share keywords with the top headlines (same core words).
     - ad_copy_matrix must meet minimum counts: primary_texts>=5, headlines>=10 (with emoji), hashtags>=20, visual_stickers must cover EVERY shot.
+    - NO LITERARY DESCRIPTIONS. You must use CapCut/Premiere terminology for editing instructions and reference actual TikTok trends.
     """
 
 

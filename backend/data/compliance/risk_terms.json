@@ -1,0 +1,16 @@
+{
+  "global": [
+    {
+      "term": "guaranteed",
+      "severity": "warn",
+      "note": "Avoid absolute claims"
+    },
+    {
+      "term": "稳赚",
+      "severity": "warn",
+      "note": "夸大收益"
+    }
+  ],
+  "platform_overrides": {},
+  "region_overrides": {}
+}

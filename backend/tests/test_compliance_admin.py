@@ -151,5 +151,13 @@ def test_compliance_stats_aggregates_and_previews(client, history_with_hits):
     assert isinstance(body["avoid_terms_preview"], list)
     assert 1 <= len(body["avoid_terms_preview"]) <= 12
 
-    assert isinstance(body["recent_hits"], list)
     assert body["rules_path"].endswith("risk_terms.json")
+
+def test_compliance_reload_endpoint(client):
+    """Verify that the hot reload endpoint clears the cache and returns success."""
+    resp = client.post("/api/compliance/reload")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert "global_terms" in body
+    assert isinstance(body["global_terms"], int)

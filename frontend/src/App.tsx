@@ -7,6 +7,7 @@ import { CopyLab } from './pages/CopyLab';
 import { WorkspaceHub } from './pages/WorkspaceHub';
 import { EntryPortal } from './pages/EntryPortal';
 import { ComplianceAdmin } from './pages/ComplianceAdmin';
+import { HistoryPage } from './pages/HistoryPage';
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
               <Routes>
                 <Route path="generator" element={<Lab />} />
                 <Route path="copy-lab" element={<CopyLab />} />
+                <Route path="history" element={<HistoryPage />} />
                 <Route path="compliance" element={<ComplianceAdmin />} />
                 <Route path="*" element={<Navigate to="/hub" replace />} />
               </Routes>

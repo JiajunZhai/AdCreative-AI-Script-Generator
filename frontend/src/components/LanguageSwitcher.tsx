@@ -1,7 +1,11 @@
 import { useTranslation } from 'react-i18next';
 import { Languages } from 'lucide-react';
 
-export function LanguageSwitcher() {
+interface LanguageSwitcherProps {
+  variant?: 'default' | 'hub';
+}
+
+export function LanguageSwitcher({ variant = 'default' }: LanguageSwitcherProps) {
   const { i18n, t } = useTranslation();
 
   const toggleLanguage = () => {
@@ -16,6 +20,20 @@ export function LanguageSwitcher() {
       // ignore
     }
   };
+
+  if (variant === 'hub') {
+    return (
+      <button 
+         className="flex items-center justify-center h-[34px] px-3 rounded-full bg-[#ebeef0] hover:bg-[#e2e5e7] transition-colors border border-transparent"
+         onClick={toggleLanguage}
+         title={t('nav.switch_language', 'Switch Language')}
+      >
+         <span className="text-[11px] font-bold text-[#627068] tracking-widest">
+           {i18n.language && i18n.language.toLowerCase().startsWith('zh') ? '文 中' : 'A EN'}
+         </span>
+      </button>
+    );
+  }
 
   return (
     <button

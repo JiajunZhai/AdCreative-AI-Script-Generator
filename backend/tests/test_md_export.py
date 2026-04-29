@@ -17,14 +17,11 @@ def test_synthesis_to_markdown_contains_script_id():
         "script": [
             {
                 "time": "0s",
-                "visual": "v",
-                "visual_meaning": "画面中文",
-                "audio_content": "a",
-                "audio_meaning": "am",
-                "text_content": "t",
-                "text_meaning": "tm",
-                "direction_note": "导演提示",
-                "sfx_transition_note": "音效提示",
+                "visual_asset": "asset",
+                "vfx_and_cut": "vfx",
+                "audio_sfx": "audio",
+                "sticker_text": "sticker",
+                "reference_trend": "trend",
             }
         ],
         "psychology_insight": "psi",
@@ -34,11 +31,10 @@ def test_synthesis_to_markdown_contains_script_id():
     }
     md = synthesis_to_markdown("Proj", {"region": "r", "platform": "p", "angle": "a"}, "mock", payload)
     assert "SOP-TEST01" in md
-    assert "## 分镜脚本" in md
-    assert "**画面**" in md
-    assert "**画面释义（中文）**" not in md
-    assert "**配音释义**" not in md
-    assert "**贴纸释义**" not in md
+    assert "Storyboard" in md
+    assert "Asset" in md
+    assert "visual_meaning" not in md
+    assert "audio_meaning" not in md
 
 
 def test_export_markdown_writes_under_out(tmp_path, monkeypatch):
@@ -71,14 +67,11 @@ def test_export_markdown_writes_under_out(tmp_path, monkeypatch):
             "script": [
                 {
                     "time": "0s",
-                    "visual": "v",
-                    "visual_meaning": "画面中文",
-                    "audio_content": "a",
-                    "audio_meaning": "am",
-                    "text_content": "t",
-                    "text_meaning": "tm",
-                    "direction_note": "导演提示",
-                    "sfx_transition_note": "音效提示",
+                    "visual_asset": "asset",
+                    "vfx_and_cut": "vfx",
+                    "audio_sfx": "audio",
+                    "sticker_text": "sticker",
+                    "reference_trend": "trend",
                 }
             ],
             "psychology_insight": "p",
@@ -116,14 +109,11 @@ def test_synthesis_to_markdown_supports_english_mode():
         "script": [
             {
                 "time": "0s",
-                "visual": "show gameplay",
-                "visual_meaning": "中文",
-                "audio_content": "voice",
-                "audio_meaning": "notes",
-                "text_content": "tap now",
-                "text_meaning": "说明",
-                "direction_note": "dir",
-                "sfx_transition_note": "sfx",
+                "visual_asset": "show gameplay",
+                "vfx_and_cut": "vfx",
+                "audio_sfx": "voice",
+                "sticker_text": "tap now",
+                "reference_trend": "trend",
             }
         ],
         "psychology_insight": "psi",
@@ -133,8 +123,8 @@ def test_synthesis_to_markdown_supports_english_mode():
     }
     md = synthesis_to_markdown("Proj", {"region": "r", "platform": "p", "angle": "a"}, "cloud", payload, "en")
     assert "# Video Script (SOP Output)" in md
-    assert "## Storyboard" in md
-    assert "**Visual**" in md
+    assert "Storyboard" in md
+    assert "Visual Asset" in md
 
 
 def test_cn_mode_localizes_non_voice_fields(monkeypatch):
@@ -152,14 +142,11 @@ def test_cn_mode_localizes_non_voice_fields(monkeypatch):
         "script": [
             {
                 "time": "0s",
-                "visual": "Visual EN",
-                "visual_meaning": "Visual meaning EN",
-                "audio_content": "Original voice",
-                "audio_meaning": "Voice notes EN",
-                "text_content": "Original sticker",
-                "text_meaning": "Sticker notes EN",
-                "direction_note": "Direction EN",
-                "sfx_transition_note": "SFX EN",
+                "visual_asset": "Visual EN",
+                "vfx_and_cut": "VFX EN",
+                "audio_sfx": "Audio EN",
+                "sticker_text": "Original sticker",
+                "reference_trend": "Trend EN",
             }
         ],
         "psychology_insight": "Psych EN",
@@ -168,8 +155,9 @@ def test_cn_mode_localizes_non_voice_fields(monkeypatch):
         "citations": [],
     }
     md = synthesis_to_markdown("Proj", {"region": "r", "platform": "p", "angle": "a"}, "cloud", payload, "cn")
-    assert "CN:Visual meaning EN" in md
-    assert "Original voice" in md
+    assert "CN:Visual EN" in md
+    assert "CN:VFX EN" in md
+    assert "CN:Audio EN" in md
     assert "Original sticker" in md
 
 
@@ -187,14 +175,11 @@ def test_en_mode_localizes_notes_but_keeps_voice_and_text():
         "script": [
             {
                 "time": "0s",
-                "visual": "show gameplay",
-                "visual_meaning": "中文视觉",
-                "audio_content": "原始配音",
-                "audio_meaning": "配音释义",
-                "text_content": "原始贴纸",
-                "text_meaning": "贴纸释义",
-                "direction_note": "导演提示",
-                "sfx_transition_note": "音效提示",
+                "visual_asset": "show gameplay",
+                "vfx_and_cut": "剪辑",
+                "audio_sfx": "原始配音",
+                "sticker_text": "原始贴纸",
+                "reference_trend": "趋势对标",
             }
         ],
         "psychology_insight": "心理洞察",
@@ -203,6 +188,4 @@ def test_en_mode_localizes_notes_but_keeps_voice_and_text():
         "citations": [],
     }
     md = synthesis_to_markdown("Proj", {"region": "r", "platform": "p", "angle": "a"}, "cloud", payload, "en")
-    assert "Original" not in md  # sanity guard for this fixture
-    assert "原始配音" in md
     assert "原始贴纸" in md

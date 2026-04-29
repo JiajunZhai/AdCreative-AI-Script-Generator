@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  avocado-frontend:
+    image: avocado-frontend:latest
+    build:
+      context: ./frontend
+    ports:
+      - "951:80"
+    depends_on:
+      - avocado-backend
+    restart: unless-stopped
+    networks:
+      - avocado-network
+
+  avocado-backend:
+    image: avocado-backend:latest
+    build:
+      context: ./backend
+    expose:
+      - "8000"
+    volumes:
+      # Persist the data directory for SQLite and JSON settings
+      - ./backend/data:/app/data
+      # Persist generated Markdown SOPs
+      - ./@OUT:/app/@OUT
+      # Mount .env if it exists on the host
+      - ./backend/.env:/app/.env
+    restart: unless-stopped
+    networks:
+      - avocado-network
+
+networks:
+  avocado-network:
+    driver: bridge

@@ -48,6 +48,28 @@ export const ComplianceAdmin: React.FC = () => {
   const [search, setSearch] = useState('');
   const [severity, setSeverity] = useState<string>('');
   const [showOverrides, setShowOverrides] = useState(true);
+  const [isReloading, setIsReloading] = useState(false);
+
+  const handleReloadRules = async () => {
+    setIsReloading(true);
+    try {
+      await axios.post(`${API_BASE}/api/compliance/reload`);
+      const projectId = currentProject?.id;
+      const statsUrl = projectId 
+        ? `${API_BASE}/api/compliance/stats?project_id=${projectId}` 
+        : `${API_BASE}/api/compliance/stats`;
+      const [r, s] = await Promise.all([
+        axios.get<RulesResp>(`${API_BASE}/api/compliance/rules`),
+        axios.get<StatsResp>(statsUrl),
+      ]);
+      setRules(r.data);
+      setStats(s.data);
+    } catch (err: any) {
+      console.error('Failed to reload rules:', err);
+    } finally {
+      setIsReloading(false);
+    }
+  };
 
   useEffect(() => {
     const abortController = new AbortController();
@@ -154,10 +176,20 @@ export const ComplianceAdmin: React.FC = () => {
                 <div className="w-[1px] h-8 bg-outline-variant/20 mx-2 hidden lg:block"></div>
                 
                 <div className="hidden lg:flex flex-col items-end gap-0.5">
-                   <span className="text-[8px] font-black text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 uppercase tracking-widest">
-                      {t('compliance.active_radar', 'ACTIVE RADAR')}
-                   </span>
-                   <div className="text-[9px] font-mono text-on-surface-variant opacity-50 truncate max-w-[120px]">
+                   <div className="flex items-center gap-2">
+                     <button
+                       onClick={handleReloadRules}
+                       disabled={isReloading}
+                       className="flex items-center gap-1 text-[8px] font-black text-secondary bg-secondary/10 px-1.5 py-0.5 rounded border border-secondary/20 uppercase tracking-widest hover:bg-secondary/20 transition-colors disabled:opacity-50"
+                     >
+                       <RefreshCw className={`w-2.5 h-2.5 ${isReloading ? 'animate-spin' : ''}`} />
+                       {t('compliance.hot_reload', 'HOT RELOAD')}
+                     </button>
+                     <span className="text-[8px] font-black text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 uppercase tracking-widest">
+                        {t('compliance.active_radar', 'ACTIVE RADAR')}
+                     </span>
+                   </div>
+                   <div className="text-[9px] font-mono text-on-surface-variant opacity-50 truncate max-w-[200px]">
                       {stats.rules_path.split(/[\\/]/).pop()}
                    </div>
                 </div>

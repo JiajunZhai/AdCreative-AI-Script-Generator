@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { Clapperboard, Sparkles, LifeBuoy, ChevronsUpDown, ChevronRight, Check, Activity, ShieldCheck, MessageSquareText } from 'lucide-react';
+import { Clapperboard, Sparkles, LifeBuoy, ChevronsUpDown, ChevronRight, Check, Activity, ShieldCheck, MessageSquareText, History } from 'lucide-react';
 import { NavLink, useLocation, useNavigate, Link } from 'react-router-dom';
 import { useReducedMotion } from 'framer-motion';
 import axios from 'axios';
@@ -97,6 +97,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   const navItems = [
     { to: '/generator', label: t('nav.lab'), icon: Sparkles },
     { to: '/copy-lab', label: t('nav.copy_lab'), icon: MessageSquareText },
+    { to: '/history', label: t('nav.history', '历史记录'), icon: History },
     { to: '/compliance', label: t('nav.compliance'), icon: ShieldCheck }
   ];
 
@@ -372,6 +373,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
             <span className="text-on-surface font-bold truncate">
               {location.pathname.startsWith('/generator') ? t('nav.lab') :
                location.pathname.startsWith('/copy-lab') ? t('nav.copy_lab') :
+               location.pathname.startsWith('/history') ? t('nav.history', '历史记录') :
                location.pathname.startsWith('/compliance') ? t('nav.compliance') :
                location.pathname.startsWith('/matrix') ? 'Matrix Console' : 
                location.pathname.startsWith('/oracle') ? t('nav.oracle') : t('nav.overview')}

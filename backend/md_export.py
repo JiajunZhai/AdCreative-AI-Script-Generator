@@ -172,139 +172,125 @@ def synthesis_to_markdown(
 
     def loc(v: Any) -> str:
         return _translate_for_mode(str(v or ""), mode)
+
+    def sanitize(v: str) -> str:
+        return str(v or "").replace('\n', ' ').replace('|', '&#124;').strip()
+
+    engine_val = engine or "UNK"
+    region_val = recipe.get('region_name') or recipe.get('region', '')
+    platform_val = recipe.get('platform_name') or recipe.get('platform', '')
+    angle_val = recipe.get('angle_name') or recipe.get('angle', '')
+
     if mode == "en":
         lines: list[str] = [
             "# Video Script (SOP Output)",
             "",
-            f"- **Project**: {project_name}",
-            f"- **Script ID**: `{sid}`",
-            f"- **Fingerprint**: `{creative_fingerprint}`",
-            f"- **Engine**: `{engine}`",
-            f"- **Region**: `{recipe.get('region_name') or recipe.get('region', '')}`",
-            f"- **Platform**: `{recipe.get('platform_name') or recipe.get('platform', '')}`",
-            f"- **Angle**: `{recipe.get('angle_name') or recipe.get('angle', '')}`",
+            f"> **[{project_name}]**",
+            f"> **ID**: `{sid}` | **Engine**: `{engine_val}` | **Region**: `{region_val}` | **Platform**: `{platform_val}` | **Angle**: `{angle_val}`",
+            f"> **Fingerprint**: `{creative_fingerprint}`",
             "",
-            "## Scores",
+            "## 📊 Scores",
             "",
-            f"- **Hook** ({payload.get('hook_score')}/100): {loc(payload.get('hook_reasoning', ''))}",
-            f"- **Clarity** ({payload.get('clarity_score')}/100): {loc(payload.get('clarity_reasoning', ''))}",
-            f"- **Conversion** ({payload.get('conversion_score')}/100): {loc(payload.get('conversion_reasoning', ''))}",
+            "| Dimension | Score | Reasoning |",
+            "|---|---|---|",
+            f"| **Hook** | {payload.get('hook_score', '?')}/100 | {sanitize(loc(payload.get('hook_reasoning', '')))} |",
+            f"| **Clarity** | {payload.get('clarity_score', '?')}/100 | {sanitize(loc(payload.get('clarity_reasoning', '')))} |",
+            f"| **Conversion** | {payload.get('conversion_score', '?')}/100 | {sanitize(loc(payload.get('conversion_reasoning', '')))} |",
             "",
-            "## Production Params",
+            "## 🎬 Production Params",
             "",
             f"- **BGM**: {loc(payload.get('bgm_direction', ''))}",
             f"- **Editing Rhythm**: {loc(payload.get('editing_rhythm', ''))}",
-            f"- **Visual Keywords**: {loc(recipe.get('visual_keywords', ''))}",
+            f"- **Visual Keywords**: `{loc(recipe.get('visual_keywords', ''))}`",
             "",
-            "## Psychology Insight",
+            "## 🧠 Strategic Insights",
             "",
-            loc(payload.get("psychology_insight", "")),
+            f"**Psychology Insight**: {loc(payload.get('psychology_insight', ''))}",
             "",
-            "## Cultural + Competitor Notes",
-            "",
+            "**Cultural + Competitor Notes**: "
         ]
     else:
         lines = [
-            "# 素材脚本（SOP 合成输出）",
+            "# 素材脚本 (SOP 合成输出)",
             "",
-            f"- **项目**: {project_name}",
-            f"- **Script ID**: `{sid}`",
-            f"- **指纹 ID**: `{creative_fingerprint}`",
-            f"- **引擎**: `{engine}`",
-            f"- **Region**: `{recipe.get('region_name') or recipe.get('region', '')}`",
-            f"- **Platform**: `{recipe.get('platform_name') or recipe.get('platform', '')}`",
-            f"- **Angle**: `{recipe.get('angle_name') or recipe.get('angle', '')}`",
+            f"> **[{project_name}]**",
+            f"> **ID**: `{sid}` | **Engine**: `{engine_val}` | **Region**: `{region_val}` | **Platform**: `{platform_val}` | **Angle**: `{angle_val}`",
+            f"> **指纹 ID**: `{creative_fingerprint}`",
             "",
-            "## 指标",
+            "## 📊 核心指标 (Metrics)",
             "",
-            f"- **Hook** ({payload.get('hook_score')}/100): {loc(payload.get('hook_reasoning', ''))}",
-            f"- **Clarity** ({payload.get('clarity_score')}/100): {loc(payload.get('clarity_reasoning', ''))}",
-            f"- **Conversion** ({payload.get('conversion_score')}/100): {loc(payload.get('conversion_reasoning', ''))}",
+            "| 维度 | 分数 | 评估说明 |",
+            "|---|---|---|",
+            f"| **Hook** | {payload.get('hook_score', '?')}/100 | {sanitize(loc(payload.get('hook_reasoning', '')))} |",
+            f"| **Clarity** | {payload.get('clarity_score', '?')}/100 | {sanitize(loc(payload.get('clarity_reasoning', '')))} |",
+            f"| **Conversion** | {payload.get('conversion_score', '?')}/100 | {sanitize(loc(payload.get('conversion_reasoning', '')))} |",
             "",
-            "## 制作参数",
+            "## 🎬 制作参数 (Production)",
             "",
             f"- **BGM**: {loc(payload.get('bgm_direction', ''))}",
             f"- **剪辑节奏**: {loc(payload.get('editing_rhythm', ''))}",
-            f"- **视觉情绪词**: {loc(recipe.get('visual_keywords', ''))}",
+            f"- **视觉情绪词**: `{loc(recipe.get('visual_keywords', ''))}`",
             "",
-            "## 心理学洞察",
+            "## 🧠 策略洞察 (Insights)",
             "",
-            loc(payload.get("psychology_insight", "")),
+            f"**心理学洞察**: {loc(payload.get('psychology_insight', ''))}",
             "",
-            "## 文化与竞品",
-            "",
+            "**文化与竞品**: "
         ]
+
     notes = payload.get("cultural_notes") or []
     if isinstance(notes, list) and notes:
         for n in notes:
             lines.append(f"- {loc(n)}")
     else:
         lines.append("_（无）_")
+
     if mode == "en":
-        lines.extend(["", "## Competitor Trend", "", loc(payload.get("competitor_trend", "")), "", "## Storyboard", ""])
+        lines.extend(["", f"**Competitor Trend**: {loc(payload.get('competitor_trend', ''))}", "", "## 🎞️ Storyboard", ""])
     else:
-        lines.extend(["", "## 竞品趋势", "", loc(payload.get("competitor_trend", "")), "", "## 分镜脚本", ""])
+        lines.extend(["", f"**竞品趋势**: {loc(payload.get('competitor_trend', ''))}", "", "## 🎞️ 分镜脚本 (Storyboard)", ""])
 
     script = payload.get("script") or []
-    if isinstance(script, list):
-        for i, line in enumerate(script, start=1):
-            if not isinstance(line, dict):
-                continue
-            if mode == "en":
-                lines.append(f"### Shot {i} - {line.get('time', '')}")
-                lines.extend(
-                    [
-                        "",
-                        f"**Visual**: {loc(line.get('visual', ''))}",
-                        "",
-                        f"**Voiceover**: {line.get('audio_content', '')}",
-                        "",
-                        f"**VO Notes**: {loc(line.get('audio_meaning', ''))}",
-                        "",
-                        f"**On-screen Text**: {line.get('text_content', '')}",
-                        "",
-                        f"**Text Notes**: {loc(line.get('text_meaning', ''))}",
-                        "",
-                        f"**Director Notes**: {loc(line.get('direction_note', ''))}",
-                        "",
-                        f"**SFX/Transition Notes**: {loc(line.get('sfx_transition_note', ''))}",
-                        "",
-                    ]
-                )
-            else:
-                lines.append(f"### 镜 {i} — {line.get('time', '')}")
-                visual_cn = loc(line.get('visual_meaning', '') or line.get('visual', ''))
-                audio = str(line.get('audio_content', '') or '').strip()
-                sticker = str(line.get('text_content', '') or '').strip()
-                direction = loc(line.get('direction_note', ''))
-                sfx_note = loc(line.get('sfx_transition_note', ''))
-                lines.extend(
-                    [
-                        "",
-                        f"**画面**: {visual_cn}",
-                        "",
-                        f"**配音**: {audio}",
-                    ]
-                )
-                if sticker:
-                    lines.extend(
-                        [
-                            "",
-                            f"**贴纸字**: {sticker}",
-                        ]
-                    )
-                lines.extend(
-                    [
-                        "",
-                        f"**导演提示（中文）**: {direction}",
-                        "",
-                        f"**音效/转场提示（中文）**: {sfx_note}",
-                        "",
-                    ]
-                )
+    if isinstance(script, list) and script:
+        if mode == "en":
+            lines.extend([
+                "| Shot | Time | Visual Asset | VFX/Cut | Audio/SFX | Sticker Text | Trend/Ref |",
+                "|:---:|:---:|---|---|---|---|---|",
+            ])
+            for i, line in enumerate(script, start=1):
+                if not isinstance(line, dict):
+                    continue
+                time_val = sanitize(line.get('time', ''))
+                asset = sanitize(loc(line.get('visual_asset', '')))
+                vfx = sanitize(loc(line.get('vfx_and_cut', '')))
+                audio = sanitize(loc(line.get('audio_sfx', '')))
+                sticker = sanitize(line.get('sticker_text', ''))
+                ref = sanitize(loc(line.get('reference_trend', '')))
+                lines.append(f"| **{i}** | {time_val} | {asset} | {vfx} | {audio} | {sticker} | {ref} |")
+        else:
+            lines.extend([
+                "| 镜头 (Shot) | 时间 (Time) | 画面素材 (Asset) | 特效/剪辑 (VFX/Cut) | 声音/配音 (Audio/SFX) | 贴纸字 (Sticker) | 热点对标 (Trend/Ref) |",
+                "|:---:|:---:|---|---|---|---|---|",
+            ])
+            for i, line in enumerate(script, start=1):
+                if not isinstance(line, dict):
+                    continue
+                time_val = sanitize(line.get('time', ''))
+                asset = sanitize(loc(line.get('visual_asset', '')))
+                vfx = sanitize(loc(line.get('vfx_and_cut', '')))
+                audio = sanitize(loc(line.get('audio_sfx', '')))
+                sticker = sanitize(line.get('sticker_text', ''))
+                ref = sanitize(loc(line.get('reference_trend', '')))
+                lines.append(f"| **{i}** | {time_val} | {asset} | {vfx} | {audio} | {sticker} | {ref} |")
+    else:
+        lines.append("_（暂无分镜数据）_" if mode == "cn" else "_(No storyboard data)_")
 
     cites = payload.get("citations") or []
-    lines.extend(["## 引用 / Citations" if mode == "cn" else "## Citations", ""])
+    if mode == "cn":
+        lines.extend(["", "## 🔗 引用 / Citations", ""])
+    else:
+        lines.extend(["", "## 🔗 Citations", ""])
+        
     if isinstance(cites, list) and cites:
         for c in cites:
             lines.append(f"- {c}")

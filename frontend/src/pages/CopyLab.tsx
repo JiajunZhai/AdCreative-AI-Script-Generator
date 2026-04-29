@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+
 import { motion, AnimatePresence } from 'framer-motion';
-import { MessageSquareText, Play, Activity, RefreshCw, History, Save, ListChecks, ListPlus, X, Settings, Type, Heading, Hash, Globe, ShieldCheck, Plus, Minus } from 'lucide-react';
+import { MessageSquareText, Activity, Save, ListChecks, ListPlus, X, Settings, Type, Heading, Hash, Globe, ShieldCheck, Plus, Minus } from 'lucide-react';
 import axios from 'axios';
 import { API_BASE } from '../config/apiBase';
 import { useProjectContext } from '../context/ProjectContext';
-import { useShellActivity } from '../context/ShellActivityContext';
+
 import { useTranslation } from 'react-i18next';
-import { ResultDashboardView } from '../components/ResultDashboardView';
 import { useLabQueue, type QueueJobPayload } from '../hooks/useLabQueue';
-import { HistoryFeedDrawer } from '../components/HistoryFeedDrawer';
 import { QueueDrawer } from '../components/lab/QueueDrawer';
 import { PresetsDrawer } from '../components/lab/PresetsDrawer';
 import { LabHeader } from '../components/lab/LabHeader';
@@ -18,7 +17,6 @@ import { ProSelect } from '../components/ProSelect';
 export const CopyLab: React.FC = () => {
   const { t } = useTranslation();
   const { currentProject } = useProjectContext();
-  const { setGeneratorShell } = useShellActivity();
 
   // State
   const [metadata, setMetadata] = useState<any>({ regions: [], platforms: [], angles: [] });
@@ -39,10 +37,7 @@ export const CopyLab: React.FC = () => {
   const [copyRegionIds, _setCopyRegionIds] = useState<string[]>([]);
   const [complianceSuggest] = useState<boolean>(true);
 
-  const [isSynthesizing, setIsSynthesizing] = useState(false);
-  const [synthesisResult, setSynthesisResult] = useState<any>(null);
-  const [dashboardOpen, setDashboardOpen] = useState(false);
-  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+
   
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
@@ -96,9 +91,6 @@ export const CopyLab: React.FC = () => {
     }).catch(err => console.error("Metadata fetch failed", err));
   }, []);
 
-  useEffect(() => {
-    setGeneratorShell(isSynthesizing, isSynthesizing ? t('lab.copy_synthesis_status') : '');
-  }, [isSynthesizing, setGeneratorShell, t]);
 
   const languageOptions = useMemo(() => [
     { value: '', label: t('lab.language_match_region', '匹配投放地区') },
@@ -111,50 +103,6 @@ export const CopyLab: React.FC = () => {
     { value: 'de', label: t('lab.lang_de', 'German') },
   ], [t]);
 
-  const handleSynthesize = async () => {
-    if (!currentProject) return;
-    setIsSynthesizing(true);
-    setSynthesisResult(null);
-    try {
-      const payloadBase: any = {
-        project_id: currentProject.id,
-        region_id: regionId,
-        platform_id: platformId,
-        angle_id: angleId,
-        engine: "cloud",
-        output_mode: outputMode,
-        compliance_suggest: complianceSuggest,
-        quantity: headlineCount,
-        primary_text_count: primaryTextCount,
-        headline_count: headlineCount,
-        hashtag_count: hashtagCount,
-        tones: copyTones,
-        locales: copyLocales.length ? copyLocales : [outputMode],
-        region_ids: copyRegionIds.length ? copyRegionIds : [regionId]
-      };
-      if (intelConstraint) payloadBase.intel_constraint = intelConstraint;
-      if (engineProvider) payloadBase.engine_provider = engineProvider;
-      if (engineModel) payloadBase.engine_model = engineModel;
-      
-      const response = await axios.post(`${API_BASE}/api/quick-copy`, payloadBase);
-      if (isMounted.current) {
-        setSynthesisResult(response.data);
-        setDashboardOpen(true);
-      }
-    } catch (e: any) {
-      let msg = t('lab.errors.synthesis_failed') as string;
-      if (e.response?.data?.detail) {
-        if (typeof e.response.data.detail === 'string') {
-          msg = e.response.data.detail;
-        } else if (e.response.data.detail?.error_code) {
-          msg = `[${e.response.data.detail.error_code}] ${e.response.data.detail.error_message || ''}`;
-        }
-      }
-      if (isMounted.current) setErrorToast(msg);
-    } finally { 
-      if (isMounted.current) setIsSynthesizing(false); 
-    }
-  };
 
   const buildCurrentPayload = useCallback((): QueueJobPayload | null => {
     if (!currentProject) return null;
@@ -185,7 +133,7 @@ export const CopyLab: React.FC = () => {
 
   const labQueue = useLabQueue('copy');
 
-  const isQuickCopyResult = useMemo(() => synthesisResult && synthesisResult.ad_copy_matrix && !Array.isArray(synthesisResult.script), [synthesisResult]);
+
 
   // Estimate fetcher
   useEffect(() => {
@@ -228,12 +176,6 @@ export const CopyLab: React.FC = () => {
         )}
       </AnimatePresence>
 
-      <ResultDashboardView
-        open={dashboardOpen}
-        onClose={() => setDashboardOpen(false)}
-        result={synthesisResult}
-        onResultUpdate={(next) => setSynthesisResult(next)}
-      />
 
       <header className="shrink-0 border-b border-outline-variant/20 bg-surface-container-lowest/80 backdrop-blur-xl px-6 py-4 relative z-20 shadow-sm">
         <LabHeader
@@ -388,29 +330,20 @@ export const CopyLab: React.FC = () => {
              {/* Sticky Action Bar */}
              <div className="shrink-0 p-5 bg-white/90 backdrop-blur-xl border-t border-[#e8ecea] flex items-center gap-4 z-30">
                <motion.button
-                 onClick={handleSynthesize}
-                 disabled={isSynthesizing || !currentProject || !regionId}
+                 onClick={() => {
+                   const payload = buildCurrentPayload();
+                   if (payload) {
+                     labQueue.addJob(payload, `Copy Job: ${currentProject?.name}`);
+                     setQueueOpen(true);
+                   }
+                 }}
+                 disabled={!currentProject || !regionId}
                  whileHover={{ scale: 1.01 }}
                  whileTap={{ scale: 0.98 }}
                  className="flex-1 py-4 text-[13px] font-bold tracking-widest flex items-center justify-center gap-3 rounded-[12px] bg-gradient-to-r from-[#0da678] to-[#128a65] text-white shadow-[0_4px_20px_rgba(13,166,120,0.3)] hover:shadow-[0_6px_24px_rgba(13,166,120,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                >
-                 {isSynthesizing ? <RefreshCw className="animate-spin w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
-                 {isSynthesizing ? t('lab.syncing', '正在生成...') : t('lab.initiate_synthesis', '开始生成')}
-               </motion.button>
-               
-               <motion.button
-                 onClick={() => {
-                   const payload = buildCurrentPayload();
-                   if (payload) labQueue.addJob(payload, `Copy Job: ${currentProject?.name}`);
-                 }}
-                 disabled={isSynthesizing || !currentProject || !regionId}
-                 whileHover={{ scale: 1.01 }}
-                 whileTap={{ scale: 0.98 }}
-                 className="w-[140px] py-4 text-[13px] font-bold tracking-widest flex items-center justify-center gap-2 rounded-[12px] bg-white border border-[#e8ecea] text-[#1a5d3f] shadow-sm hover:bg-[#f8faf9] hover:border-[#3aa668]/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                 title={t('lab.presets_enqueue', '加入队列') as string}
-               >
-                 <ListPlus className="w-4 h-4" />
-                 {t('lab.presets_enqueue', '加入队列')}
+                 <ListPlus className="w-5 h-5 fill-white/20" />
+                 {t('lab.presets_enqueue', '加入队列生成')}
                </motion.button>
                
                <button 
@@ -442,16 +375,8 @@ export const CopyLab: React.FC = () => {
               <div className="shrink-0 p-4 border-b border-outline-variant/30 bg-surface-container-low/50">
                  <StrategyConsole
                    title={t('lab.resonance_feed', 'Parameter Resonance')}
-                   titleIcon={<Activity className={isSynthesizing ? 'animate-pulse text-primary' : 'w-3.5 h-3.5 text-primary'} />}
-                   headerAction={
-                     <button
-                       onClick={() => setHistoryDrawerOpen(true)}
-                       className="flex items-center gap-1.5 px-2 py-1 rounded border border-outline-variant/30 hover:bg-surface-container hover:text-primary transition-colors text-[9px] uppercase tracking-widest font-bold text-on-surface-variant"
-                     >
-                       <History className="w-3 h-3" />
-                       {t('lab.history_feed', 'History Feed')}
-                     </button>
-                   }
+                   titleIcon={<Activity className="w-3.5 h-3.5 text-primary" />}
+                   headerAction={null}
                    metadata={metadata}
                    regionId={regionId} setRegionId={setRegionId}
                    platformId={platformId} setPlatformId={setPlatformId}
@@ -462,7 +387,6 @@ export const CopyLab: React.FC = () => {
               <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
                  <div className="p-4">
                     <AnimatePresence mode="wait">
-                    {!synthesisResult ? (
                       <motion.div key="standby" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center justify-center h-full text-center space-y-6 opacity-60">
                          <div className="relative flex items-center justify-center w-24 h-24">
                             <div className="absolute inset-0 rounded-full border border-primary/20 bg-primary/5" />
@@ -479,26 +403,11 @@ export const CopyLab: React.FC = () => {
                             <div className="text-[10px] text-on-surface-variant font-medium tracking-widest uppercase">Waiting for matrix parameters</div>
                          </div>
                       </motion.div>
-                    ) : (
-                      <motion.div key="result" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-3">
-                         {isQuickCopyResult ? (
-                           <div className="text-[11px] font-bold text-on-surface-variant text-center py-10">{t('lab.matrix_compiled', 'Matrix compiled. Check Dashboard.')}</div>
-                         ) : synthesisResult.script?.map((line: any, idx: number) => (
-                           <div key={idx} className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-3 shadow-sm">
-                             <div className="text-[10px] font-black text-primary mb-1.5 uppercase">[{line.time}]</div>
-                             <div className="text-[12px] font-medium leading-relaxed mb-2">{line.visual}</div>
-                             <div className="text-[11px] italic text-on-surface-variant bg-surface-container/50 p-2 rounded-lg">{line.audio_content}</div>
-                           </div>
-                         ))}
-                         <button onClick={() => setSynthesisResult(null)} className="w-full py-3 mt-4 border border-outline-variant/30 text-[10px] uppercase font-black tracking-widest text-on-surface-variant bg-surface-container-low/30 hover:bg-surface-container-low transition-all">{t('lab.reset_feed', 'Reset Feed')}</button>
-                      </motion.div>
-                    )}
                  </AnimatePresence>
                  </div>
               </div>
          </div>
       </div>
-      <HistoryFeedDrawer isOpen={historyDrawerOpen} onClose={() => setHistoryDrawerOpen(false)} filterType="COPY" />
       <QueueDrawer
         isOpen={queueOpen}
         onClose={() => setQueueOpen(false)}

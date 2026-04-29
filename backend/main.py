@@ -1868,14 +1868,23 @@ def compliance_rules():
     }
 
 
+@app.post("/api/compliance/reload")
+def reload_compliance_rules():
+    """Hot reload risk terms from risk_terms.json or DB without restarting the backend."""
+    from compliance import invalidate_cache, load_risk_terms
+    invalidate_cache()
+    cfg = load_risk_terms()
+    return {"success": True, "global_terms": len(cfg.get("global") or [])}
+
+
 @app.get("/api/compliance/stats")
 def compliance_stats(project_id: Optional[str] = None):
     """Phase 24/C3 — Aggregated compliance hits across *all* projects' history.
-
-    The UI uses this to render a "most-hit terms" leaderboard plus a preview
-    of the avoid_terms list that would be injected into new prompts.
+    
+    Optimized: Direct SQL query on history_log avoids O(N) full project parsing.
     """
-    from projects_api import load_projects
+    from db import fetchall
+    import json
     from compliance import load_risk_terms
 
     term_counts: dict[str, int] = {}
@@ -1884,35 +1893,40 @@ def compliance_stats(project_id: Optional[str] = None):
     total_records = 0
     risky_records = 0
 
-    for proj in load_projects():
-        if project_id and proj.get("id") != project_id:
+    if project_id:
+        rows = fetchall("SELECT payload_json, created_at, project_id, script_id FROM history_log WHERE project_id = ? ORDER BY created_at DESC", (project_id,))
+    else:
+        rows = fetchall("SELECT payload_json, created_at, project_id, script_id FROM history_log ORDER BY created_at DESC")
+
+    for r in rows:
+        try:
+            entry = json.loads(r["payload_json"] or "{}")
+        except Exception:
             continue
-        log = proj.get("history_log") if isinstance(proj, dict) else None
-        if not isinstance(log, list):
-            continue
-        for entry in log:
-            if not isinstance(entry, dict):
+            
+        total_records += 1
+        comp = entry.get("compliance") or {}
+        rl = str(comp.get("risk_level") or "ok").lower()
+        severity_counts[rl] = severity_counts.get(rl, 0) + 1
+        hits = comp.get("hits") or []
+        if hits:
+            risky_records += 1
+        for h in hits if isinstance(hits, list) else []:
+            term = str((h or {}).get("term") or "").strip()
+            if not term:
                 continue
-            total_records += 1
-            comp = entry.get("compliance") or {}
-            rl = str(comp.get("risk_level") or "ok").lower()
-            severity_counts[rl] = severity_counts.get(rl, 0) + 1
-            hits = comp.get("hits") or []
-            if hits:
-                risky_records += 1
-            for h in hits if isinstance(hits, list) else []:
-                term = str((h or {}).get("term") or "").strip()
-                if not term:
-                    continue
-                term_counts[term] = term_counts.get(term, 0) + 1
+            term_counts[term] = term_counts.get(term, 0) + 1
+            
+        # Collect top 40 recent hits globally across valid hits
+        if len(recent_hits) < 40 and hits:
             for h in (hits or [])[:3]:
                 recent_hits.append(
                     {
-                        "project_id": proj.get("id"),
-                        "script_id": entry.get("id"),
+                        "project_id": r["project_id"],
+                        "script_id": r["script_id"] or entry.get("id"),
                         "term": (h or {}).get("term"),
                         "severity": (h or {}).get("severity"),
-                        "timestamp": entry.get("timestamp"),
+                        "timestamp": r["created_at"] or entry.get("timestamp"),
                     }
                 )
 
@@ -1920,7 +1934,6 @@ def compliance_stats(project_id: Optional[str] = None):
         [{"term": k, "count": v} for k, v in term_counts.items()],
         key=lambda x: (-x["count"], x["term"]),
     )[:50]
-    recent_hits.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
     recent_hits = recent_hits[:40]
 
     # Avoid-terms preview mirrors the aggregation rule used at prompt time
